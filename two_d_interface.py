@@ -51,6 +51,16 @@ class TwoDInterface:
         #         Smaller tolerances do not always converge
         self._rtol = rtol
 
+    def clear_cache(self) -> None:
+        """Resets the torch radius cache."""
+
+        self._radius_cache = {}
+
+    @property
+    def mesh(self) -> pv.DataSet:
+        """2-D dataset loaded with PyVista"""
+        return self._mesh
+
     @property
     def field_names(self) -> None:
         """Names of point data fields"""

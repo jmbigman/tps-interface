@@ -121,7 +121,7 @@ def _plot_profiles(tdi: TwoDInterface, field: str, z: np.ndarray, var: str,
 
         plt.figure(figsize=(4, 3))
         plt.plot(prof[:, 0]/radius, prof[:, 1])
-        plt.title(f"$z = {z_:.2f}$")
+        plt.title(f"$z = {z_:.4f}$")
 
         plt.xlabel("$r$")
         plt.xlim((-0.05, 1.05))
@@ -172,6 +172,37 @@ def _plot_terms(terms: list[np.ndarray], z: np.ndarray, labels: list[str],
     plt.close()
 
 
+def _plot_radius(tdi: TwoDInterface) -> None:
+    """Plots the torch radius.
+
+    args:
+        tdi: Interface to 2-D dataset
+    """
+
+    z_min, z_max = tdi.mesh.bounds[2:4]
+
+    z = np.linspace(z_min, z_max, 250)
+
+    r_grid = [tdi.torch_radius(z_) for z_ in z]
+
+    tdi.clear_cache()
+
+    plt.figure(figsize=(6, 3))
+    plt.plot(z, r_grid)
+
+    plt.xlabel('$z$')
+    plt.ylabel('$R(z)$')
+
+    _, y_max = plt.gca().get_ylim()
+    plt.ylim((0.0, y_max))
+
+    plt.grid()
+    plt.tight_layout()
+
+    plt.savefig(join(IMAGES_FOLDER, "radius.pdf"))
+    plt.close()
+
+
 if __name__ == "__main__":
 
 
@@ -181,13 +212,15 @@ if __name__ == "__main__":
 
     plt.rcParams.update(PRMS_DICT)
 
-    z_grid = np.linspace(0, 0.33, 100)
+    z_grid = np.linspace(0, 0.33, 50)
 
     # =============================================================================
     # Angular momentum
     # =============================================================================
 
     two_d = TwoDInterface("results/angular_momentum.pvtu")
+
+    _plot_radius(two_d)
 
     print(f"Angular momentum fields: {two_d.field_names}")
 
@@ -236,6 +269,7 @@ if __name__ == "__main__":
 
     _plot_profiles(two_d, "axial_momentum", z_grid, r"\rho u_z")
 
+    # Plot pressure profiles while they are loaded
     _plot_profiles(two_d, "pressure", z_grid, r"p")
 
     adv_flux = np.array([two_d.area_integral("advective_flux", z_) for z_ in z_grid])
@@ -262,7 +296,7 @@ if __name__ == "__main__":
             _wall_term(r'\tau_{rz}'),
             _wall_term(r'\tau_{zz}', deriv=True, neg=True),
             _wall_term(r'p', deriv=True),
-            r'$\left \langle \rho \right \rangle g$']
+            r'$-\left \langle \rho \right \rangle g$']
 
     _plot_terms(trms, z_grid, lbls, "axial_momentum", r'\rho u_z')
 
