@@ -128,7 +128,14 @@ def _plot_profiles(tdi: TwoDInterface, field: str, z: np.ndarray, var: str,
         plt.xticks([0.0, 0.25, 0.5, 0.75, 1.0],
                 ["$0$", "$R/4$", "$R/2$", "$3R/4$", "$R$"])
 
-        ylabel = r'$' + var + r'/\left \langle ' + var + r'\right \rangle$'
+        y_min, y_max = plt.gca().get_ylim()
+        if y_min > 0.0:
+            # Change viewing window to start at 0.0 for positive profiles
+            y_min = 0.0
+            y_max = 1.05*y_max
+            plt.ylim((y_min, y_max))
+
+        ylabel = r'$ \pi R^2 ' + var + r'/\left \langle ' + var + r'\right \rangle$'
         plt.ylabel(ylabel)
 
         plt.grid()

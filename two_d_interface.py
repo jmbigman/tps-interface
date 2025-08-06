@@ -251,9 +251,9 @@ class TwoDInterface:
     def radial_profile(self, field: str, z: float, n_points: int = 101) \
             -> np.ndarray:
         """Evaluates the radial profile of a field at the given axial position.
-        The profile of a quantity q is the normalized function
+        The profile of a quantity q is the normalized, unitless function
 
-            f(r) = q(r)/⟨q⟩
+            f(r) = pi * R^2 * q(r)/⟨q⟩
 
         The area integral is evaluated via Simpson's rule, as in
         `area_integral`.
@@ -283,6 +283,6 @@ class TwoDInterface:
 
         integral = 2*np.pi*simpson(r_pts*field_values, r_pts)
 
-        out = np.column_stack((r_pts, field_values/integral))
+        out = np.column_stack((r_pts, np.pi*r**2*field_values/integral))
 
         return out
