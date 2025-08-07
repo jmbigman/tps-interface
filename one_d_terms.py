@@ -6,6 +6,7 @@ from os.path import join, exists
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator
 
 from two_d_interface import TwoDInterface
 
@@ -139,10 +140,52 @@ def _plot_profiles(tdi: TwoDInterface, field: str, z: np.ndarray, var: str,
         plt.ylabel(ylabel)
 
         plt.grid()
+        plt.gca().xaxis.set_minor_locator(AutoMinorLocator(5))
+        plt.gca().yaxis.set_minor_locator(AutoMinorLocator(5))
+        plt.grid(which='minor', linestyle='-', alpha=0.3)
+
         plt.tight_layout()
 
         plt.savefig(join(folder, str(i)+'.pdf'))
         plt.close()
+
+
+def _plot_area_integral(tdi: TwoDInterface, field: str, z: np.ndarray,
+                        var: str, n_points: int = None) -> None:
+    """Plots the axial development of the given field.
+
+    args:
+        tdi: Interface to 2-D dataset
+        field: Field name
+        z: Axial positions
+        var: LaTeX for variable/quantity being plotted
+        n_points: Number of sample points in radial profile
+    """
+
+    folder = join(IMAGES_FOLDER, field)
+
+    plt.figure(figsize=(8, 6))
+
+    if n_points is None:
+        area_integral = [tdi.area_integral(field, z_) for z_ in z]
+    else:
+        area_integral = [tdi.area_integral(field, z_, n_points) for z_ in z]
+
+    plt.plot(z, area_integral)
+
+    ylbl = r'$\left \langle ' + var + r'\right \rangle$'
+    plt.ylabel(ylbl)
+    plt.xlabel("$z$")
+
+    plt.grid()
+    plt.gca().xaxis.set_minor_locator(AutoMinorLocator(5))
+    plt.gca().yaxis.set_minor_locator(AutoMinorLocator(5))
+    plt.grid(which='minor', linestyle='-', alpha=0.3)
+
+    plt.tight_layout()
+
+    plt.savefig(join(folder, "area_integral.pdf"))
+    plt.close()
 
 
 def _plot_terms(terms: list[np.ndarray], z: np.ndarray, labels: list[str],
@@ -169,10 +212,15 @@ def _plot_terms(terms: list[np.ndarray], z: np.ndarray, labels: list[str],
 
     plt.xlabel("$z$")
 
-    plt.ylabel(_pderiv(var, False, True))
+    plt.ylabel(_pderiv(var, False, True) + " Terms")
+
+    plt.grid()
+    plt.gca().xaxis.set_minor_locator(AutoMinorLocator(5))
+    plt.gca().yaxis.set_minor_locator(AutoMinorLocator(5))
+    plt.grid(which='minor', linestyle='-', alpha=0.3)
 
     plt.legend()
-    plt.grid()
+
     plt.tight_layout()
 
     plt.savefig(join(folder, "governing.pdf"))
@@ -204,6 +252,10 @@ def _plot_radius(tdi: TwoDInterface) -> None:
     plt.ylim((0.0, y_max))
 
     plt.grid()
+    plt.gca().xaxis.set_minor_locator(AutoMinorLocator(5))
+    plt.gca().yaxis.set_minor_locator(AutoMinorLocator(5))
+    plt.grid(which='minor', linestyle='-', alpha=0.3)
+
     plt.tight_layout()
 
     plt.savefig(join(IMAGES_FOLDER, "radius.pdf"))
@@ -212,14 +264,15 @@ def _plot_radius(tdi: TwoDInterface) -> None:
 
 if __name__ == "__main__":
 
-
     PRMS_DICT = {"font.size": 12, "text.usetex": True, "font.family": 'serif',
                 "font.serif": 'Computer Modern', "lines.linewidth": 2,
-                "text.latex.preamble": r'\usepackage{amsfonts}'}
+                "text.latex.preamble": r'\usepackage{amsfonts}',
+                'xtick.minor.size': 0, 'ytick.minor.size': 0,
+                'xtick.minor.width': 0, 'ytick.minor.size': 0}
 
     plt.rcParams.update(PRMS_DICT)
 
-    z_grid = np.linspace(0, 0.33, 50)
+    z_grid = np.linspace(0, 0.315, 50)
 
     # =============================================================================
     # Angular momentum
@@ -232,6 +285,8 @@ if __name__ == "__main__":
     print(f"Angular momentum fields: {two_d.field_names}")
 
     _plot_profiles(two_d, "angular_momentum", z_grid, r"\ell_z")
+
+    _plot_area_integral(two_d, "angular_momentum", z_grid, r"\ell_z")
 
     adv_flux = np.array([two_d.area_integral("advective_flux", z_) for z_ in z_grid])
     visc_flux = np.array([two_d.area_integral("viscous_flux", z_) for z_ in z_grid])
@@ -258,6 +313,8 @@ if __name__ == "__main__":
 
     _plot_profiles(two_d, "density", z_grid, r"\rho")
 
+    _plot_area_integral(two_d, "density", z_grid, r"\rho")
+
     adv_flux = np.array([two_d.area_integral("advective_flux", z_) for z_ in z_grid])
 
     trms = [-np.gradient(adv_flux)]
@@ -276,33 +333,41 @@ if __name__ == "__main__":
 
     _plot_profiles(two_d, "axial_momentum", z_grid, r"\rho u_z")
 
-    # Plot pressure profiles while they are loaded
+    _plot_area_integral(two_d, "axial_momentum", z_grid, r"\rho u_z")
+
+    # Plot pressure while it is loaded
     _plot_profiles(two_d, "pressure", z_grid, r"p")
 
+    _plot_area_integral(two_d, "pressure", z_grid, r"p")
+
+    r = np.array([two_d.torch_radius(z_) for z_ in z_grid])
+    r_d = np.gradient(r)
+
     adv_flux = np.array([two_d.area_integral("advective_flux", z_) for z_ in z_grid])
-    pressure = np.array([two_d.area_integral("pressure", z_) for z_ in z_grid])
+    # Area-average of pressure
+    pressure_avg = np.array([two_d.area_integral("pressure", z_) for z_ in z_grid]) \
+        / np.pi*r**2
     visc_flux = np.array([two_d.area_integral("viscous_flux", z_) for z_ in z_grid])
     wall_stress_rz = np.array([two_d.wall_value("wall_stress_rz", z_) for z_ in z_grid])
     wall_stress_zz = np.array([two_d.wall_value("wall_stress_zz", z_) for z_ in z_grid])
     wall_pressure = np.array([two_d.wall_value("pressure", z_) for z_ in z_grid])
     body_force = np.array([two_d.area_integral("body_force", z_) for z_ in z_grid])
-    r = np.array([two_d.torch_radius(z_) for z_ in z_grid])
-    r_d = np.gradient(r)
+
 
     trms = [-np.gradient(adv_flux),
-            -np.gradient(pressure),
+            -np.pi*r**2*np.gradient(pressure_avg),
             np.gradient(visc_flux),
             2*np.pi*r*wall_stress_rz,
             -2*np.pi*r*r_d*wall_stress_zz,
-            2*np.pi*r*r_d*wall_pressure,
+            2*np.pi*r*r_d*(wall_pressure - pressure_avg),
             -body_force]
 
     lbls = [_pderiv(r'\rho u_z^2', area=True, neg=True),
-            _pderiv(r'p', area=True, neg=True),
+            r'$-\pi R^2 \partial_z p_{avg}$',
             _pderiv(r'\tau_{zz}', area=True),
             _wall_term(r'\tau_{rz}'),
             _wall_term(r'\tau_{zz}', deriv=True, neg=True),
-            _wall_term(r'p', deriv=True),
+            r"$2 \pi R R' \left( p^b - p_{avg} \right)$",
             r'$-\left \langle \rho \right \rangle g$']
 
     _plot_terms(trms, z_grid, lbls, "axial_momentum", r'\rho u_z')
@@ -317,13 +382,16 @@ if __name__ == "__main__":
 
     _plot_profiles(two_d, "radial_momentum", z_grid, r"\rho u_r")
 
+    _plot_area_integral(two_d, "radial_momentum", z_grid, r"\rho u_r")
+
     adv_flux = np.array([two_d.area_integral("advective_flux", z_) for z_ in z_grid])
     visc_flux = np.array([two_d.area_integral("viscous_flux", z_) for z_ in z_grid])
     wall_stress_rr = np.array([two_d.wall_value("wall_stress_rr", z_) for z_ in z_grid])
     wall_stress_rz = np.array([two_d.wall_value("wall_stress_rz", z_) for z_ in z_grid])
-    wall_pressure = np.array([two_d.wall_value("pressure", z_) for z_ in z_grid])
+    # Difference between boundary pressure and naive average
+    pressure_diff = np.array([two_d.wall_value("pressure", z_) for z_ in z_grid]) \
+        - np.array([two_d.linear_average("pressure", z_) for z_ in z_grid])
     centrifugal = np.array([two_d.linear_average("centrifugal", z_) for z_ in z_grid])
-    pressure = np.array([two_d.linear_average("pressure", z_) for z_ in z_grid])
     stress_tt = np.array([two_d.linear_average("stress_tt", z_) for z_ in z_grid])
     r = np.array([two_d.torch_radius(z_) for z_ in z_grid])
     r_d = np.gradient(r)
@@ -332,18 +400,16 @@ if __name__ == "__main__":
             np.gradient(visc_flux),
             2*np.pi*r*wall_stress_rr,
             -2*np.pi*r*r_d*wall_stress_rz,
-            2*np.pi*r*wall_pressure,
+            2*np.pi*r*pressure_diff,
             2*np.pi*r*centrifugal,
-            -2*np.pi*r*pressure,
             -2*np.pi*r*stress_tt]
 
     lbls = [_pderiv(r'\rho u_r u_z', area=True, neg=True),
             _pderiv(r'\tau_{rz}', area=True),
             _wall_term(r'\tau_{rr}'),
             _wall_term(r'\tau_{r z}', deriv=True, neg=True),
-            _wall_term(r'p'),
+            r'$2 \pi R \left( p^b - \overline{p} \right)$',
             _wall_term(r'\rho u_\theta^2', lin_avg=True),
-            _wall_term(r'p', lin_avg=True, neg=True),
             _wall_term(r'\tau_{\theta \theta}', lin_avg=True, neg=True)]
 
     _plot_terms(trms, z_grid, lbls, "radial_momentum", r'\rho u_r')

@@ -129,7 +129,7 @@ def angular_momentum(filename: str, verbose: bool = True) -> None:
 
     # Angular momentum
     calc = _calculate(gradient, output_quantities[0],
-                      'density * coords X * swirl')
+                      'density * coordsX * swirl')
 
     # Advective flux
     calc = _calculate(calc, output_quantities[1],
@@ -343,6 +343,7 @@ def density(filename: str, verbose: bool = True) -> None:
     SaveData(output_filename, proxy=extr)
 
     _end_print(output_filename, extr, verbose)
+
 
 if __name__ == "__main__":
 
