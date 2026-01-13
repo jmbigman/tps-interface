@@ -1,3 +1,8 @@
+# Misc.
+.DS_Store
+*.h5
+*.vtu
+
 # Output directories
 results/*
 images/*

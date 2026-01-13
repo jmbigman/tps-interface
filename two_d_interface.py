@@ -1,65 +1,58 @@
-"""Class to open a .pvtu file or equivalent and evaluate the terms in a 1-D
-governing equation."""
+"""Class to open a .pvtu file or equivalent and evaluate quantities relevant to
+the 1-D governing equations."""
+
+from typing import Callable
 
 import numpy as np
-from scipy.integrate import simpson
+
+import h5py
 
 import pyvista as pv
 
-# (NOTE): The SciPy implementation of Simpson's rule allows for an even number
-#         of sample points, but it is less accurate, so an odd number is
-#         enforced.
+TORCH_LENGTH = 0.32
 
-
-def _simpson_check(n_points: int) -> None:
-    """Checks the number of points for Simpson's rule.
-
-    args:
-        n_points: Number of sample points
-    """
-
-    if n_points % 2 == 0:
-        msg = "Simpson's rule requires an odd number of sample points"
-        raise ValueError(msg)
-
-    if not isinstance(n_points, int):
-        msg = "n_points must be an integer"
-        raise TypeError(msg)
-
-    if n_points < 2:
-        msg = "n_points must be at least two"
-        raise ValueError(msg)
+# Operator acting on UnstructuredGrid
+UnstructuredGridOperator = Callable[[pv.UnstructuredGrid], pv.UnstructuredGrid]
 
 
 class TwoDInterface:
-    """Calculates radial integrals and profiles from 2-D data in a .pvtu file.
+    """Calculates radial integrals and profiles from 2-D data in an
+    UnstructuredGrid. For generality, this works with data in memory; it does
+    not load files.
 
     args:
-        file: .pvtu file or equivalent
+        mesh: The 2-D data (for a single time point)
         rtol: Relative tolerance convergence criterion for torch radius
     """
 
     # Cache torch radii
     _radius_cache = {}
 
-    def __init__(self, file: str, rtol: float = 1e-7):
+    def __init__(self, mesh: pv.UnstructuredGrid = None, rtol: float = 1e-7):
 
-        # Load file with PyVista
-        self._mesh = pv.read(file)
-
-        # (NOTE): rtol = 1e-7 is found to generally work well.
-        #         Smaller tolerances do not always converge
+        self._mesh = mesh
         self._rtol = rtol
 
-    def clear_cache(self) -> None:
-        """Resets the torch radius cache."""
-
-        self._radius_cache = {}
+        if rtol < 1e-7:
+            print('rtol of 1e-7 generally works well. Smaller tolerances do '
+                  + 'not always converge.')
 
     @property
-    def mesh(self) -> pv.DataSet:
-        """2-D dataset loaded with PyVista"""
+    def mesh(self) -> pv.UnstructuredGrid:
+        """Current mesh"""
         return self._mesh
+
+    def set_mesh(self, mesh: pv.UnstructuredGrid) -> None:
+        """Sets a new mesh.
+
+        args:
+            mesh: The new 2-D data
+        """
+        self._mesh = mesh
+
+    def clear_radius_cache(self) -> None:
+        """Resets the torch radius cache."""
+        self._radius_cache = {}
 
     @property
     def field_names(self) -> None:
@@ -72,7 +65,6 @@ class TwoDInterface:
         args:
             field: Field name
         """
-
         if field not in self.field_names:
             msg = "Specified field is not in the dataset"
             raise RuntimeError(msg)
@@ -130,6 +122,24 @@ class TwoDInterface:
         # Left point is always in the domain
         return r_l
 
+    def save_torch_radius(self, filename: str, n_points: int,
+                          z_max: float = TORCH_LENGTH) -> None:
+        """Saves the torch radius as an HDF5 file.
+
+        args:
+            filename: Name of HDF5 file
+            n_points: Number of axial points
+            z_max: Maximum axial position
+        """
+
+        z = np.linspace(0.0, z_max, n_points)
+        r = np.array([self.torch_radius(z_) for z_ in z], dtype=float)
+
+        with h5py.File(filename, 'w') as f:
+            f.create_dataset('axial position', data=z)
+            f.create_dataset('torch radius', data=r)
+            f.attrs['units'] = 'm'
+
     def __call__(self, field: str, r: float, z: float) -> float | np.ndarray:
         """Evaluates a field at the given position.
 
@@ -175,15 +185,15 @@ class TwoDInterface:
 
         return wall_value
 
-    def area_integral(self, field: str, z: float, n_points: int = 101) \
+    def cs_integral(self, field: str, z: float, n_points: int = 101) \
             -> float | np.ndarray:
-        """Evaluates the cross-sectional area integral of a field at the given
-        axial position, under the assumption of axisymmetry. For a function f,
-        the integral is
+        """Evaluates the cross-sectional integral of a field at the given axial
+        position, under the assumption of axisymmetry. For a function f, the
+        integral is
 
-            ⟨f⟩(z) = 2 * pi * int_0^R(z) f(r) * r dr
+            ⟨f⟩(z) = 2 * pi * int_0^R(z) f(r, z) * r dr
 
-        and is evaluated via Simpson's rule.
+        and is evaluated via trapezoidal rule.
 
         args:
             field: Field name
@@ -194,68 +204,29 @@ class TwoDInterface:
             The radial integral
         """
 
-        _simpson_check(n_points)
-
         self._field_check(field)
 
         mesh = self._mesh
 
         r = self.torch_radius(z)
 
-        line = pv.Line([0.0, z, 0.0], [r, z, 0.0], n_points - 1)
+        line = pv.Line([0.0, z, 0.0], [r, z, 0.0], resolution=n_points-1)
 
         r_pts = line.points[:, 0]
         field_values = line.sample(mesh).point_data[field]
 
-        integral = 2*np.pi*simpson(r_pts*field_values, r_pts)
+        integral = 2*np.pi*np.trapezoid(r_pts*field_values, r_pts)
 
         return integral
-
-    def linear_average(self, field: str, z: float, n_points: int = 101) \
-            -> float | np.ndarray:
-        """Evaluates the linear average of a field over [0, R] at the given
-        axial position (no weighting by the radius). For a function f, the
-        average is
-
-            f̅(z) = (1 / R(z)) * int_0^R(z) f(r) dr
-
-        and is evaluated via Simpson's rule. This is essentially a regular
-        average if the cylindrical geometry is ignored.
-
-        args:
-            field: Field name
-            z: Axial position
-            n_points: Number of sample points along the line, must be odd
-
-        returns:
-            The linear average
-        """
-
-        _simpson_check(n_points)
-
-        self._field_check(field)
-
-        mesh = self._mesh
-
-        r = self.torch_radius(z)
-
-        line = pv.Line([0.0, z, 0.0], [r, z, 0.0], n_points - 1)
-
-        r_pts = line.points[:, 0]
-        field_values = line.sample(mesh).point_data[field]
-
-        average = simpson(field_values, r_pts) / r
-
-        return average
 
     def radial_profile(self, field: str, z: float, n_points: int = 101) \
             -> np.ndarray:
         """Evaluates the radial profile of a field at the given axial position.
-        The profile of a quantity q is the normalized, unitless function
+        The profile of a quantity q is the normalized, dimensionless function
 
-            f(r) = pi * R^2 * q(r)/⟨q⟩
+            f(r, z) = pi * R(z)^2 * q(r, z) / ⟨q⟩(z)
 
-        The area integral is evaluated via Simpson's rule, as in
+        The area integral is evaluated via trapezoial rule, as in
         `area_integral`.
 
         args:
@@ -268,21 +239,98 @@ class TwoDInterface:
             second is the profile.
         """
 
-        _simpson_check(n_points)
-
         self._field_check(field)
 
         mesh = self._mesh
 
         r = self.torch_radius(z)
 
-        line = pv.Line([0.0, z, 0.0], [r, z, 0.0], n_points - 1)
+        line = pv.Line([0.0, z, 0.0], [r, z, 0.0], resolution=n_points-1)
 
         r_pts = line.points[:, 0]
         field_values = line.sample(mesh).point_data[field]
 
-        integral = 2*np.pi*simpson(r_pts*field_values, r_pts)
+        integral = 2*np.pi*np.trapezoid(r_pts*field_values, r_pts)
 
         out = np.column_stack((r_pts, np.pi*r**2*field_values/integral))
 
         return out
+
+
+def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
+                    field_names: list[str] = None,
+                    operator: UnstructuredGridOperator = lambda x: x) \
+                        -> pv.UnstructuredGrid:
+    """Calculates the average and standard deviation of fields in a .pvd
+    dataset inside the given time range.
+
+    args:
+        reader: .pvd file reader
+        t1: Index of first time points, optional. Default is 0.
+        t2: Index of last time point, optional. Default is -1.
+        field_names: List of field names to use, optional. Default is all.
+        operator: Operator to apply at each time point before calculating the
+                  statistics, optional. Default is identity.
+
+    returns:
+        Averages and standard deviations of the fields. Field names are
+        appended with '_avg' or '_std'
+    """
+
+    if t2 == -1:
+        t2 = len(reader.time_values) - 1
+
+    ###########################################################################
+    # First time point
+    ###########################################################################
+
+    reader.set_active_time_point(t1)
+
+    mesh = operator(reader.read()[0])
+
+    if field_names is None:
+        field_names = mesh.point_data.keys()
+
+    # Initialize empty
+    out = pv.UnstructuredGrid(mesh.cells, mesh.celltypes, mesh.points)
+
+    data = {}
+
+    for fn in field_names:
+
+        data[fn] = [mesh.point_data[fn]]
+
+    ###########################################################################
+    # Iterate over remaining time points
+    ###########################################################################
+
+    for t in range(t1+1, t2+1):
+
+        reader.set_active_time_point(t)
+
+        mesh = operator(reader.read()[0])
+
+        for fn in field_names:
+
+            data[fn].append(mesh.point_data[fn])
+
+    ###########################################################################
+    # Calculate statistics
+    ###########################################################################
+
+    t_pts = np.array(reader.time_values[t1:t2+1])
+    t_int = t_pts[-1] - t_pts[0]
+
+    for fn in field_names:
+
+        field_data = np.stack(data[fn], axis=0)
+
+        avg = np.trapezoid(field_data, t_pts, axis=0)/t_int
+
+        std = np.trapezoid((field_data - avg)**2, t_pts, axis=0)/t_int
+        std = np.sqrt(std)
+
+        out.point_data[fn+'_avg'] = avg
+        out.point_data[fn+'_std'] = std
+
+    return out
