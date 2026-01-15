@@ -5,10 +5,13 @@ from os.path import join, exists
 
 import numpy as np
 
+from scipy.optimize import curve_fit
+
 from matplotlib import pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 
 from two_d_interface import TwoDInterface
+from model_profiles import ModelProfile, relative_error
 
 IMAGES_FOLDER = 'images'
 
@@ -98,7 +101,8 @@ def plot_cs_integral(tdi: TwoDInterface, field: str, z: np.ndarray,
 
 
 def plot_profiles(tdi: TwoDInterface, field: str, z: np.ndarray, var: str,
-                  n_points: int = None) -> None:
+                  n_points: int = None, model_profile: ModelProfile = None) \
+                    -> None:
     """Plots the radial profiles of the given field and axial positions.
 
     args:
@@ -107,6 +111,7 @@ def plot_profiles(tdi: TwoDInterface, field: str, z: np.ndarray, var: str,
         z: Axial positions
         var: LaTeX for variable/quantity being plotted
         n_points: Number of sample points in radial profile
+        model_profile: Model profile to curve fit and plot
     """
 
     folder = join(IMAGES_FOLDER, field)
@@ -123,9 +128,32 @@ def plot_profiles(tdi: TwoDInterface, field: str, z: np.ndarray, var: str,
 
         radius = prof[-1, 0]
 
+        # Normalized radial coordinate
+        r_hat = prof[:, 0]/radius
+
         plt.figure(figsize=(4, 3))
-        plt.plot(prof[:, 0]/radius, prof[:, 1])
+        plt.plot(r_hat, prof[:, 1], label="Data")
         plt.title(f"$z = {z_:.4f}$")
+
+        if model_profile is not None:
+
+            # Error norm should be weighted by the radius for cross-sectional
+            # integral
+            # curve_fit takes reciprocal of weights like classical WLS
+            with np.errstate(divide='ignore'):
+                weights = 1.0/r_hat
+
+            cf_result = curve_fit(model_profile, r_hat, prof[:, 1],
+                                  sigma=weights, method='dogbox')
+
+            model_eval = model_profile(r_hat, *cf_result[0])
+
+            plt.plot(r_hat, model_eval, ls='--', label='Model')
+            plt.legend()
+
+            rel_err = relative_error(r_hat, prof[:, 1], model_eval)
+
+            print(f"z: {z_:.3f}, rel_error: {rel_err:.3e}")
 
         plt.xlabel(r"$\hat{r}$")
         plt.xlim((-0.05, 1.05))

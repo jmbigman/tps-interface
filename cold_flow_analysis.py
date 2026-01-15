@@ -8,6 +8,7 @@ import pyvista as pv
 
 from two_d_interface import time_statistics, TwoDInterface, TORCH_LENGTH
 from plotting import plot_radius, plot_cs_integral, plot_profiles
+from model_profiles import angular, axial
 
 
 def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
@@ -65,10 +66,10 @@ if __name__ == '__main__':
                      r'u_z', 100)
 
     plot_profiles(tdi, 'ang_m_avg', np.linspace(0.01, TORCH_LENGTH, 50),
-                  r'r u_\theta', 100)
+                  r'r u_\theta', 100, angular)
 
     plot_profiles(tdi, 'vel_r_avg', np.linspace(0.01, TORCH_LENGTH, 50),
                   r'u_r', 100)
 
     plot_profiles(tdi, 'vel_z_avg', np.linspace(0.01, TORCH_LENGTH, 50),
-                  r'u_z', 100)
+                  r'u_z', 100, axial)
