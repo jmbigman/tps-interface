@@ -5,13 +5,12 @@ from os.path import join, exists
 
 import numpy as np
 
-from scipy.optimize import curve_fit
-
 from matplotlib import pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
+from matplotlib.patches import Ellipse
 
-from two_d_interface import TwoDInterface
-from model_profiles import ModelProfile, relative_error
+from two_d_interface import TwoDInterface, TORCH_LENGTH
+from model_profiles import ModelProfile
 
 IMAGES_FOLDER = 'images'
 
@@ -28,29 +27,40 @@ plt.rcParams.update({"font.size": 12,
                      'ytick.minor.size': 0, 'ytick.minor.width': 0})
 
 
-def plot_radius(tdi: TwoDInterface) -> None:
-    """Plots the torch radius.
+def plot_radius(tdi: TwoDInterface, z_points: list[float]) -> None:
+    """Plots the torch radius in units of [cm].
 
     args:
         tdi: Interface to 2-D dataset
+        z_points: Axial positions to mark with vertical lines [m]
     """
 
-    z_min, z_max = tdi.mesh.bounds[2:4]
+    plt.figure(figsize=(5, 2.5))
 
-    z = np.linspace(z_min, z_max, 250)
+    for z_ in z_points:
+        plt.axvline(100*z_, ls=':', lw=1.5, color='black')
 
-    r_grid = [tdi.torch_radius(z_) for z_ in z]
+    z_min = tdi.mesh.bounds[2]
+    z_max = TORCH_LENGTH
+
+    z = np.linspace(z_min, z_max, 500)
+
+    r_grid = np.array([tdi.torch_radius(z_) for z_ in z])
 
     tdi.clear_radius_cache()
 
-    plt.figure(figsize=(5, 3))
-    plt.plot(z, r_grid)
+    plt.plot(100*z, 100*r_grid)
 
-    plt.xlabel('$z$')
-    plt.ylabel('$R(z)$')
+    circle = Ellipse((13, 2.625),
+                    width=3.25,
+                    height=0.58,
+                    fill=False, edgecolor='red', lw=1.5)
+    plt.gca().add_patch(circle)
 
-    _, y_max = plt.gca().get_ylim()
-    plt.ylim((0.0, y_max))
+    plt.ylim((0.0, 3.0))
+
+    plt.xlabel(r'$z \,[\mathrm{cm}]$')
+    plt.ylabel(r'$R(z) \,[\mathrm{cm}]$')
 
     plt.grid()
     plt.gca().xaxis.set_minor_locator(AutoMinorLocator(5))
@@ -63,33 +73,33 @@ def plot_radius(tdi: TwoDInterface) -> None:
     plt.close()
 
 
-def plot_cs_integral(tdi: TwoDInterface, field: str, z: np.ndarray,
-                     var: str, n_points: int = None) -> None:
+def plot_cs_integral(z: np.ndarray, cs_integral: np.ndarray, var: str,
+                     field: str) -> None:
     """Plots the axial development of the cross-sectional integral of the given
     field.
 
     args:
-        tdi: Interface to 2-D dataset
-        field: Field name
-        z: Axial positions
-        var: LaTeX for variable/quantity being plotted
-        n_points: Number of sample points in radial profile
+        z: Axial positions [m]
+        cs_integral: Cross-sectional integral of quantity
+        var: LaTeX for quantity being plotted
+        field: Field name. Used to name output file.
     """
 
     plt.figure(figsize=(5, 3))
 
-    if n_points is None:
-        cs_integral = [tdi.cs_integral(field, z_) for z_ in z]
-    else:
-        cs_integral = [tdi.cs_integral(field, z_, n_points) for z_ in z]
-
-    plt.plot(z, cs_integral)
+    plt.plot(100*z, cs_integral)
 
     ylbl = r'$\left \langle ' + var + r'\right \rangle$'
     plt.ylabel(ylbl)
-    plt.xlabel("$z$")
+    plt.xlabel(r'$z \,[\mathrm{cm}]$')
 
     plt.grid()
+
+    bottom, top = plt.ylim()
+
+    if bottom > 0:
+        plt.ylim(0.0, top)
+
     plt.gca().xaxis.set_minor_locator(AutoMinorLocator(5))
     plt.gca().yaxis.set_minor_locator(AutoMinorLocator(5))
     plt.grid(which='minor', linestyle='-', alpha=0.3)
@@ -100,18 +110,20 @@ def plot_cs_integral(tdi: TwoDInterface, field: str, z: np.ndarray,
     plt.close()
 
 
-def plot_profiles(tdi: TwoDInterface, field: str, z: np.ndarray, var: str,
-                  n_points: int = None, model_profile: ModelProfile = None) \
+def plot_profiles(z: np.ndarray, profs: np.ndarray, var: str, field: str,
+                  model: ModelProfile = None, params: np.ndarray = None) \
                     -> None:
     """Plots the radial profiles of the given field and axial positions.
+    Can optionally include the optimized model profile.
 
     args:
-        tdi: Interface to 2-D dataset
-        field: Field name
-        z: Axial positions
-        var: LaTeX for variable/quantity being plotted
-        n_points: Number of sample points in radial profile
-        model_profile: Model profile to curve fit and plot
+        z: Axial positions [m]
+        profs: Radial profiles from data
+        var: LaTeX for quantity being plotted
+        field: Field name. Used to name output folder.
+        mode: Model profile to plot, optional.
+        params: Model profile parameters, optional. Required if a model is
+                passed.
     """
 
     folder = join(IMAGES_FOLDER, field)
@@ -119,41 +131,26 @@ def plot_profiles(tdi: TwoDInterface, field: str, z: np.ndarray, var: str,
     if not exists(folder):
         makedirs(folder)
 
+    r_hat = np.linspace(0.0, 1.0, profs.shape[1])
+
     for i, z_ in enumerate(z):
 
-        if n_points is None:
-            prof = tdi.radial_profile(field, z_, )
-        else:
-            prof = tdi.radial_profile(field, z_, n_points)
-
-        radius = prof[-1, 0]
-
-        # Normalized radial coordinate
-        r_hat = prof[:, 0]/radius
+        prof = profs[i]
 
         plt.figure(figsize=(4, 3))
-        plt.plot(r_hat, prof[:, 1], label="Data")
-        plt.title(f"$z = {z_:.4f}$")
+        plt.plot(r_hat, prof, label="Data")
+        plt.title(f"$z = {100*z_:.2f}" + r'\, [\mathrm{cm}]$')
 
-        if model_profile is not None:
+        if model is not None:
 
-            # Error norm should be weighted by the radius for cross-sectional
-            # integral
-            # curve_fit takes reciprocal of weights like classical WLS
-            with np.errstate(divide='ignore'):
-                weights = 1.0/r_hat
+            if params is None:
+                raise ValueError("Parameters must be passed to evaluate the"
+                                 + " model profiles.")
 
-            cf_result = curve_fit(model_profile, r_hat, prof[:, 1],
-                                  sigma=weights, method='dogbox')
-
-            model_eval = model_profile(r_hat, *cf_result[0])
+            model_eval = model(r_hat, *params[i])
 
             plt.plot(r_hat, model_eval, ls='--', label='Model')
             plt.legend()
-
-            rel_err = relative_error(r_hat, prof[:, 1], model_eval)
-
-            print(f"z: {z_:.3f}, rel_error: {rel_err:.3e}")
 
         plt.xlabel(r"$\hat{r}$")
         plt.xlim((-0.05, 1.05))

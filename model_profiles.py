@@ -1,13 +1,31 @@
 """Proposed radial profile models with curve fitting."""
 
-from typing import Callable
+from typing import Protocol
 
 import numpy as np
 
 from scipy.special import erfi
+from scipy.optimize import curve_fit
 
-# Should take point(s), then additional arguments
-ModelProfile = Callable[..., float | np.ndarray]
+from two_d_interface import TwoDInterface, N_POINTS
+
+###############################################################################
+# General utilities
+###############################################################################
+
+
+class ModelProfile(Protocol):
+    def __call__(self, x: np.ndarray, *params: float) -> float | np.ndarray:
+        """Model radial profile.
+
+        args:
+            x: Evaluation points (normalized radius)
+            *params: Parameters to control the shape
+
+        returns:
+            The model profile evaluation(s)
+        """
+        ...
 
 
 def relative_error(r_hat: np.ndarray, data: np.ndarray, model: np.ndarray) \
@@ -33,6 +51,85 @@ def relative_error(r_hat: np.ndarray, data: np.ndarray, model: np.ndarray) \
     return np.sqrt(abs_diff/scale)
 
 
+def sample_profile(tdi: TwoDInterface, field: str, z: np.ndarray,
+                   n_points: int = N_POINTS) -> tuple[np.ndarray, np.ndarray]:
+    """Samples the quantity profiles at the axial positions.
+
+    args:
+        tdi: Interface to 2-D dataset
+        field: Field name (to be fit against)
+        z: Axial positions [m]
+        n_points: Number of sample points in radial profile, optional.
+
+    returns:
+        The radial profiles,
+        the cross-sectional integrals
+    """
+
+    prof_list = []
+    integral_list = []
+
+    for z_ in z:
+
+        prof, integral = tdi.radial_profile(field, z_, n_points)
+
+        prof_list.append(prof)
+        integral_list.append(integral)
+
+    return np.array(prof_list), np.array(integral_list)
+
+
+def fit_profile(tdi: TwoDInterface, field: str, z: np.ndarray,
+                n_points: int = N_POINTS, model: ModelProfile = None) \
+                    -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Samples the quantity profiles at the axial positions and fits the
+    model profile parameters.
+
+    args:
+        tdi: Interface to 2-D dataset
+        field: Field name (to be fit against)
+        z: Axial positions [m]
+        n_points: Number of sample points in radial profile
+        model: Model profile to curve fit
+
+    returns:
+        The radial profiles,
+        the optimal parameters at the axial positions,
+        the relative errors,
+        the cross-sectional integrals
+    """
+
+    profs, integrals = sample_profile(tdi, field, z, n_points)
+
+    r_hat = np.linspace(0.0, 1.0, n_points)
+
+    params_list = []
+    rel_err_list = []
+
+    for prof in profs:
+
+        # Error norm should be weighted by the radius for cross-sectional
+        # integral comparison
+        # `curve_fit` takes reciprocal of weights like classical WLS
+        with np.errstate(divide='ignore'):
+            weights = 1.0/r_hat
+
+        cf_result = curve_fit(model, r_hat, prof, sigma=weights,
+                              method='dogbox')
+
+        model_eval = model(r_hat, *cf_result[0])
+
+        params_list.append(cf_result[0])
+        rel_err_list.append(relative_error(r_hat, prof, model_eval))
+
+    return profs, np.array(params_list), np.array(rel_err_list), integrals
+
+
+###############################################################################
+# Specific profiles
+###############################################################################
+
+
 def _angular_coeff(a: float) -> float:
     """Normalization coefficient for the angular momentum radial profile.
 
@@ -56,6 +153,10 @@ def _angular_coeff(a: float) -> float:
 
 def angular(x: float | np.ndarray, a: float) -> float | np.ndarray:
     """Angular momentum radial profile.
+
+        f(x) = A * exp(a*x^2) * x^2 * (1 - x)
+
+    The normalization coefficient, A, has an analytical expression in a.
 
     args:
         x: Evaluation points (normalized radius)
@@ -98,6 +199,10 @@ def _axial_coeff(a: float, b: float) -> float:
 
 def axial(x: float | np.ndarray, a: float, b: float) -> float | np.ndarray:
     """Axial momentum radial profile.
+
+        f(x) = A * (exp(a*x^2) - b) * (1 - x^2)
+
+    The normalization coefficient, A, has an analytical expression in a, b.
 
     args:
         x: Evaluation points (normalized radius)

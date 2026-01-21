@@ -9,10 +9,48 @@ import h5py
 
 import pyvista as pv
 
-TORCH_LENGTH = 0.32
+# Torch length from 2-D inlet condition to end of nozzle [m]
+TORCH_LENGTH = 0.34
+
+# Default number of points for radial sampling
+N_POINTS = 100
 
 # Operator acting on UnstructuredGrid
 UnstructuredGridOperator = Callable[[pv.UnstructuredGrid], pv.UnstructuredGrid]
+
+
+def _make_line(start: np.ndarray, end: np.ndarray, parameterized: np.ndarray) \
+     -> pv.PolyData:
+    """Forms a line with non-uniform sampling.
+
+    args:
+        start: Position of line start
+        end: Position of line end
+        parameterized: Sampling parameter in [0, 1]
+
+    returns:
+        The line with sample points
+    """
+
+    if start.ndim != 1:
+        raise ValueError("start must be 1-D")
+
+    if start.size != 3:
+        raise ValueError("start must have 3 entries")
+
+    if end.ndim != 1:
+        raise ValueError("end must be 1-D")
+
+    if end.size != 3:
+        raise ValueError("end must have 3 entries")
+
+    if parameterized.ndim != 1:
+        raise ValueError("parameterized must be 1-D")
+
+    if np.any(parameterized != np.unique(parameterized)):
+        raise ValueError("parameterized must be increasing without repeats")
+
+    return pv.PolyData(start + np.outer(parameterized, end - start))
 
 
 class TwoDInterface:
@@ -185,76 +223,69 @@ class TwoDInterface:
 
         return wall_value
 
-    def cs_integral(self, field: str, z: float, n_points: int = 101) \
-            -> float | np.ndarray:
-        """Evaluates the cross-sectional integral of a field at the given axial
-        position, under the assumption of axisymmetry. For a function f, the
-        integral is
+    def radial_profile(self, field: str, z: float, n_points: int = N_POINTS) \
+            -> tuple[np.ndarray, float]:
+        """Evaluates the radial profile of a field at the given axial position.
+        The profile, f, of a quantity, q, is the normalized, dimensionless
+        function
 
-            ⟨f⟩(z) = 2 * pi * int_0^R(z) f(r, z) * r dr
+            f(r, z) = pi * R(z)^2 * q(r, z) / ⟨q⟩(z).
 
-        and is evaluated via trapezoidal rule.
+        The cross-sectional integral
+
+            ⟨q⟩(z) = 2 * pi * int_0^R(z) q(r, z) * r dr
+
+        is evaluated via trapezoidal rule.
 
         args:
             field: Field name
             z: Axial position
-            n_points: Number of sample points along the line, must be odd
+            n_points: Number of uniform sample points along the line, optional.
+
+        returns:
+            The profile values,
+            the cross-sectional integral
+        """
+
+        self._field_check(field)
+
+        mesh = self._mesh
+
+        torch_r = self.torch_radius(z)
+
+        r_hat = np.linspace(0.0, 1.0, n_points)
+
+        r_pts = r_hat*torch_r
+
+        # (NOTE): Line is formed based on normalized radius coordinates
+        #         for consistency
+
+        line = _make_line(np.array([0.0, z, 0.0]),
+                          np.array([torch_r, z, 0.0]),
+                          r_hat)
+
+        field_values = line.sample(mesh).point_data[field]
+
+        integral = 2*np.pi*np.trapezoid(r_pts*field_values, r_pts)
+
+        prof = np.pi*torch_r**2*field_values/integral
+
+        return prof, integral
+
+    def cs_integral(self, field: str, z: float, n_points: int = N_POINTS) \
+            -> float | np.ndarray:
+        """Evaluates the cross-sectional integral of a field at the given axial
+        position. See `radial_profile` for details.
+
+        args:
+            field: Field name
+            z: Axial position
+            n_points: Number of sample points along the line, optional.
 
         returns:
             The radial integral
         """
-
-        self._field_check(field)
-
-        mesh = self._mesh
-
-        r = self.torch_radius(z)
-
-        line = pv.Line([0.0, z, 0.0], [r, z, 0.0], resolution=n_points-1)
-
-        r_pts = line.points[:, 0]
-        field_values = line.sample(mesh).point_data[field]
-
-        integral = 2*np.pi*np.trapezoid(r_pts*field_values, r_pts)
-
-        return integral
-
-    def radial_profile(self, field: str, z: float, n_points: int = 101) \
-            -> np.ndarray:
-        """Evaluates the radial profile of a field at the given axial position.
-        The profile of a quantity q is the normalized, dimensionless function
-
-            f(r, z) = pi * R(z)^2 * q(r, z) / ⟨q⟩(z)
-
-        The area integral is evaluated via trapezoial rule, as in
-        `area_integral`.
-
-        args:
-            field: Field name
-            z: Axial position
-            n_points: Number of sample points along the line, must be odd
-
-        returns:
-            A 2-D NumPy array. The first column is the radial position and the
-            second is the profile.
-        """
-
-        self._field_check(field)
-
-        mesh = self._mesh
-
-        r = self.torch_radius(z)
-
-        line = pv.Line([0.0, z, 0.0], [r, z, 0.0], resolution=n_points-1)
-
-        r_pts = line.points[:, 0]
-        field_values = line.sample(mesh).point_data[field]
-
-        integral = 2*np.pi*np.trapezoid(r_pts*field_values, r_pts)
-
-        out = np.column_stack((r_pts, np.pi*r**2*field_values/integral))
-
-        return out
+        return self.radial_profile(field, z, n_points)[1]
 
 
 def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
@@ -334,3 +365,47 @@ def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
         out.point_data[fn+'_std'] = std
 
     return out
+
+
+def step_finder(tdi: TwoDInterface, z_l: float, z_r: float,
+                verbose: bool = True) -> float:
+    """Locates the step by finding the axial location with the maximum
+    torch radius derivative within a given window.
+
+    args:
+        tdi: Interface to 2-D dataset
+        z_l: Left bound of step region
+        z_r: Right bound of step region
+        verbose: Indicator to print the result, optional. Default is True.
+
+    returns:
+        The location of maximum torch radius derivative
+    """
+
+    if z_l >= z_r:
+        raise ValueError("z_l < z_r required")
+
+    # Coarse search
+    z = np.linspace(z_l, z_r, 100)
+
+    r = np.array([tdi.torch_radius(z_) for z_ in z])
+
+    dr_dz = np.gradient(r, z, edge_order=2)
+
+    loc = np.argmax(np.abs(dr_dz))
+
+    # Refined search
+    z_ref = np.linspace(z[loc-1], z[loc+1], 100)
+
+    r = np.array([tdi.torch_radius(z_) for z_ in z_ref])
+
+    dr_dz = np.gradient(r, z_ref, edge_order=2)
+
+    loc = np.argmax(np.abs(dr_dz))
+
+    z_step = z_ref[loc]
+
+    if verbose:
+        print(f"Location of step: {100*z_step:.4f} [cm]")
+
+    return z_ref[loc]
