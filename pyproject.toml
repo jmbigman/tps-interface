@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tps_interface"
+version = "0.1.0"
+description = "Reads and analyzes to 2- and 3-D TPS simulation results for 1-D modeling."
+authors = [{name = "Joshua Bigman", email = "jbigman@utexas.edu"}]
+dependencies = [
+    "numpy",
+    "pyvista",
+    "scipy",
+    "matplotlib",
+    "h5py",
+    "flake8"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tps_interface"]

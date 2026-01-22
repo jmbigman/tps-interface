@@ -9,8 +9,8 @@ from matplotlib import pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 from matplotlib.patches import Ellipse
 
-from two_d_interface import TwoDInterface, TORCH_LENGTH
-from model_profiles import ModelProfile
+from .two_d_interface import TwoDInterface, TORCH_LENGTH
+from .model_profiles import ModelProfile
 
 IMAGES_FOLDER = 'images'
 
@@ -52,9 +52,9 @@ def plot_radius(tdi: TwoDInterface, z_points: list[float]) -> None:
     plt.plot(100*z, 100*r_grid)
 
     circle = Ellipse((13, 2.625),
-                    width=3.25,
-                    height=0.58,
-                    fill=False, edgecolor='red', lw=1.5)
+                     width=3.25,
+                     height=0.58,
+                     fill=False, edgecolor='red', lw=1.5)
     plt.gca().add_patch(circle)
 
     plt.ylim((0.0, 3.0))

@@ -170,7 +170,10 @@ class TwoDInterface:
             z_max: Maximum axial position
         """
 
-        z = np.linspace(0.0, z_max, n_points)
+        # Minimum axial position is not z = 0, since inlet is truncated
+        z_min = self.mesh.bounds[2]
+
+        z = np.linspace(z_min, z_max, n_points)
         r = np.array([self.torch_radius(z_) for z_ in z], dtype=float)
 
         with h5py.File(filename, 'w') as f:

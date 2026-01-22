@@ -7,7 +7,7 @@ import numpy as np
 from scipy.special import erfi
 from scipy.optimize import curve_fit
 
-from two_d_interface import TwoDInterface, N_POINTS
+from .two_d_interface import TwoDInterface, N_POINTS
 
 ###############################################################################
 # General utilities

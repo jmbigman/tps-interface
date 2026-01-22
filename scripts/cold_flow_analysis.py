@@ -11,12 +11,10 @@ import pyvista as pv
 from matplotlib import pyplot as plt
 from matplotlib.ticker import AutoMinorLocator, LogLocator
 
-from two_d_interface import time_statistics, TwoDInterface, TORCH_LENGTH, \
-    step_finder, N_POINTS
-from plotting import plot_radius, plot_cs_integral, plot_profiles, \
-    IMAGES_FOLDER
-from model_profiles import angular, axial, fit_profile, angular, axial, \
-    sample_profile
+from tps_interface import TwoDInterface, time_statistics, TORCH_LENGTH, \
+    step_finder, N_POINTS, plot_radius, plot_cs_integral, plot_profiles, \
+    IMAGES_FOLDER, fit_profile, sample_profile
+from tps_interface.model_profiles import angular, axial
 
 
 def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
@@ -176,6 +174,8 @@ if __name__ == '__main__':
     mesh.save('momentum_statistics.vtu')
 
     tdi = TwoDInterface(mesh)
+
+    tdi.save_torch_radius('1d_geometry.h5', 500)
 
     # Example z locations
     z_list = [0.05, 0.13, 0.22, 0.32]

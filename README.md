@@ -1,11 +1,27 @@
 # TPS-radial-profiles
-The following `python` packages are required:
+Reads and analyzes 2- and 3-D `TPS` simulation results for 1-D modeling.
+
+## Installation
+The latest Python version with support for the `vtk` package is 3.13: [https://vtk.org/download/](https://vtk.org/download/). To install (on Mac):
 ```
-numpy matplotlib pyvista
+brew install python@3.13
+python3.13 -m venv venv-interface
+source venv-interface/bin/activate
+pip3 install -e .
 ```
 
-`two_d_interface.py`: Evaluates quantities relevant to the 1-D model from 2-D data
+## Modules
+`two_d_interface`: Evaluates quantities needed for 1-D modeling from 2-D `TPS` simulation results
 
-`plotting.py`: Various plotting functions
+`plotting`: Plots the torch radius, cross-sectionally integrated quantities, radial profiles, etc.
 
+`model_profiles`: Samples radial profiles from `TPS` data and fits parameters in model profiles
+
+## Scripts
 `cold_flow_analysis.py`: Analyzes time-dependent cold flow data
+
+## Development
+To lint the code, run:
+```
+flake8 tps_interface scripts
+```
