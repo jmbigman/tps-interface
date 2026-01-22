@@ -1,5 +1,6 @@
 # TPS-radial-profiles
-Reads and analyzes 2- and 3-D `TPS` simulation results for 1-D modeling.
+Reads and analyzes 2- and 3-D `Torch Plasma Simulator` (`TPS`) simulation results for 1-D modeling.
+`TPS` can be found here: [https://github.com/pecos/tps](https://github.com/pecos/tps).
 
 ## Installation
 The latest Python version with support for the `vtk` package is 3.13: [https://vtk.org/download/](https://vtk.org/download/). To install (on Mac):
