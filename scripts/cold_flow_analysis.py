@@ -2,7 +2,7 @@
 
 from os.path import join
 
-from argparse import ArgumentParser
+from argparse import ArgumentParser, BooleanOptionalAction
 
 import numpy as np
 
@@ -14,7 +14,7 @@ from matplotlib.ticker import AutoMinorLocator, LogLocator
 from tps_interface import TwoDInterface, time_statistics, TORCH_LENGTH, \
     step_finder, N_POINTS, plot_radius, plot_cs_integral, plot_profiles, \
     IMAGES_FOLDER, fit_profile, sample_profile
-from tps_interface.model_profiles import angular, axial
+from tps_interface.model_profiles import angular, axial, save_parameters
 
 
 def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
@@ -27,7 +27,7 @@ def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
         The update data
     """
 
-    mesh.point_data['ang_m'] = mesh.points[:, 0]*mesh.point_data['swirl']
+    mesh.point_data['ang_m'] = -mesh.points[:, 0]*mesh.point_data['swirl']
 
     mesh.point_data['vel_r'] = mesh.point_data['velocity'][:, 0]
     mesh.point_data['vel_z'] = mesh.point_data['velocity'][:, 1]
@@ -154,24 +154,32 @@ def _plot_profile_grid(z_list: list[float], tdi: TwoDInterface) -> None:
 
 
 parser = ArgumentParser(description="Analysis of 2-D cold flow data")
-parser.add_argument('-f', '--filename', type=str, metavar="\b",
+parser.add_argument('-f', type=str, metavar="\b",
                     dest="filename",
-                    help="Name of .pvtu file with 2-D TPS data")
+                    help="Name of file with 2-D TPS data, typically .pvd")
+parser.add_argument('--pre-process', action=BooleanOptionalAction,
+                    metavar="\b", default=True, dest='pre_process',
+                    help="Pre-process the data for time statistics")
+parser.add_argument('-o', metavar="\b", default="momentum_statistics.vtu",
+                    dest='output', help="Output filename for time statistics")
 parser.add_argument('-t1', type=int, metavar="\b", dest="t1", default=0,
                     help="First time point to include in statistics")
 parser.add_argument('-t2', type=int, metavar="\b", dest="t2", default=-1,
                     help="Last time point to include in statistics")
 
+
 if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    reader = pv.PVDReader(args.filename)
-
-    mesh = time_statistics(reader, args.t1, args.t2,
-                           ['ang_m', 'vel_r', 'vel_z'], _pre_process)
-
-    mesh.save('momentum_statistics.vtu')
+    if args.pre_process:
+        reader = pv.PVDReader(args.filename)
+        mesh = time_statistics(reader, args.t1, args.t2,
+                               ['ang_m', 'vel_r', 'vel_z'], _pre_process)
+        mesh.save(args.output)
+    else:
+        mesh = pv.read(args.filename)
+        print(type(mesh))
 
     tdi = TwoDInterface(mesh)
 
@@ -186,7 +194,7 @@ if __name__ == '__main__':
 
     plot_radius(tdi, z_list)
 
-    z = np.linspace(0.01, TORCH_LENGTH, 10)
+    z = np.linspace(tdi.z_min, TORCH_LENGTH, 100)
 
     # Angular momentum
 
@@ -220,3 +228,11 @@ if __name__ == '__main__':
     plot_cs_integral(z, rad_cs, 'u_r', 'vel_r_avg')
 
     plot_profiles(z, rad_profs, 'u_r', 'vel_r_avg')
+
+    save_parameters(z, np.hstack((ang_params, ax_params)).T,
+                    ['angular exponential',
+                     'axial exponential',
+                     'axial shift'],
+                    ['Angular momentum exponential parameter',
+                     'Axial momentum exponential parameter',
+                     'Axial momentum shift parameter'])

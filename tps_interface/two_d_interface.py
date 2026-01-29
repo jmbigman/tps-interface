@@ -80,6 +80,12 @@ class TwoDInterface:
         """Current mesh"""
         return self._mesh
 
+    @property
+    def z_min(self) -> float:
+        """Minimum axial position in mesh. May not be zero since the inlet is
+        truncated."""
+        return self.mesh.bounds[2]
+
     def set_mesh(self, mesh: pv.UnstructuredGrid) -> None:
         """Sets a new mesh.
 
@@ -170,10 +176,7 @@ class TwoDInterface:
             z_max: Maximum axial position
         """
 
-        # Minimum axial position is not z = 0, since inlet is truncated
-        z_min = self.mesh.bounds[2]
-
-        z = np.linspace(z_min, z_max, n_points)
+        z = np.linspace(self.z_min, z_max, n_points)
         r = np.array([self.torch_radius(z_) for z_ in z], dtype=float)
 
         with h5py.File(filename, 'w') as f:

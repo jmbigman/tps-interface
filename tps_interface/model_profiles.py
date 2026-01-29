@@ -7,6 +7,8 @@ import numpy as np
 from scipy.special import erfi
 from scipy.optimize import curve_fit
 
+import h5py
+
 from .two_d_interface import TwoDInterface, N_POINTS
 
 ###############################################################################
@@ -123,6 +125,27 @@ def fit_profile(tdi: TwoDInterface, field: str, z: np.ndarray,
         rel_err_list.append(relative_error(r_hat, prof, model_eval))
 
     return profs, np.array(params_list), np.array(rel_err_list), integrals
+
+
+def save_parameters(z: np.ndarray, params: np.ndarray, names: list[str],
+                    descs: list[str], fname: str = 'params.h5') -> None:
+    """Saves the parameters in HDF5 format.
+
+    args:
+        z: Axial coordinates
+        params: Parameters to save. Must have shape (# z pos., # params)
+        names: Parameter names
+        descs: Parameter descriptions
+        fname: Output file name, optional. Default is 'params.h5'
+    """
+
+    with h5py.File(fname, 'w') as f:
+        z_pos = f.create_dataset('axial position', data=z)
+        z_pos.attrs['units'] = 'm'
+
+        for param, name, desc in zip(params, names, descs):
+            d_set = f.create_dataset(name, data=param)
+            d_set.attrs['desc'] = desc
 
 
 ###############################################################################
