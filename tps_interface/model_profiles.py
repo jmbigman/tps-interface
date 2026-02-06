@@ -133,7 +133,7 @@ def save_parameters(z: np.ndarray, params: np.ndarray, names: list[str],
 
     args:
         z: Axial coordinates
-        params: Parameters to save. Must have shape (# z pos., # params)
+        params: Parameters to save. Must have shape (# params, # z pos.)
         names: Parameter names
         descs: Parameter descriptions
         fname: Output file name, optional. Default is 'params.h5'
@@ -146,6 +146,29 @@ def save_parameters(z: np.ndarray, params: np.ndarray, names: list[str],
         for param, name, desc in zip(params, names, descs):
             d_set = f.create_dataset(name, data=param)
             d_set.attrs['desc'] = desc
+
+
+def save_cs_integrals(z: np.ndarray, cs_integrals: np.ndarray,
+                      names: list[str], units: list[str],
+                      fname: str = 'cs_integral.h5') -> None:
+    """Saves the cross-sectional integrals in HDF5 format.
+
+    args:
+        z: Axial coordinates
+        cs_integrals: Cross-sectional integrals to save. Must have shape
+                      (# quantities, # z pos.)
+        names: Quantity names
+        units: Quantity units
+        fname: Output file name, optional. Default is 'cs_integral.h5'
+    """
+
+    with h5py.File(fname, 'w') as f:
+        z_pos = f.create_dataset('axial position', data=z)
+        z_pos.attrs['units'] = 'm'
+
+        for cs_integral, name, u_ in zip(cs_integrals, names, units):
+            d_set = f.create_dataset(name, data=cs_integral)
+            d_set.attrs['units'] = u_
 
 
 ###############################################################################

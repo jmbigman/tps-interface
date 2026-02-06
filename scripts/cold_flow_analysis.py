@@ -14,7 +14,8 @@ from matplotlib.ticker import AutoMinorLocator, LogLocator
 from tps_interface import TwoDInterface, time_statistics, TORCH_LENGTH, \
     step_finder, N_POINTS, plot_radius, plot_cs_integral, plot_profiles, \
     IMAGES_FOLDER, fit_profile, sample_profile
-from tps_interface.model_profiles import angular, axial, save_parameters
+from tps_interface.model_profiles import angular, axial, save_parameters, \
+    save_cs_integrals
 
 
 def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
@@ -179,7 +180,6 @@ if __name__ == '__main__':
         mesh.save(args.output)
     else:
         mesh = pv.read(args.filename)
-        print(type(mesh))
 
     tdi = TwoDInterface(mesh)
 
@@ -228,6 +228,12 @@ if __name__ == '__main__':
     plot_cs_integral(z, rad_cs, 'u_r', 'vel_r_avg')
 
     plot_profiles(z, rad_profs, 'u_r', 'vel_r_avg')
+
+    save_cs_integrals(z, np.vstack((ax_cs, ang_cs, rad_cs)),
+                      ['axial momentum',
+                       'angular momentum',
+                       'radial momentum'],
+                       ['m^3/s', 'm^4/s', 'm^3/s'])
 
     save_parameters(z, np.hstack((ang_params, ax_params)).T,
                     ['angular exponential',
