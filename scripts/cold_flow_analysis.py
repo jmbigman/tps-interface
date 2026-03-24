@@ -233,7 +233,7 @@ if __name__ == '__main__':
                       ['axial momentum',
                        'angular momentum',
                        'radial momentum'],
-                       ['m^3/s', 'm^4/s', 'm^3/s'])
+                      ['m^3/s', 'm^4/s', 'm^3/s'])
 
     save_parameters(z, np.hstack((ang_params, ax_params)).T,
                     ['angular exponential',

@@ -57,6 +57,12 @@ def plot_radius(tdi: TwoDInterface, z_points: list[float]) -> None:
                      fill=False, edgecolor='red', lw=1.5)
     plt.gca().add_patch(circle)
 
+    circle = Ellipse((31.5, 1.9),
+                     width=1.75,
+                     height=1.0,
+                     fill=False, edgecolor='red', lw=1.5)
+    plt.gca().add_patch(circle)
+
     plt.ylim((0.0, 3.0))
 
     plt.xlabel(r'$z \,[\mathrm{cm}]$')
