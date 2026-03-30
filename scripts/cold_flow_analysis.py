@@ -140,8 +140,8 @@ def _plot_profile_grid(z_list: list[float], tdi: TwoDInterface) -> None:
                        color='tab:red')
         axs[1, i].grid()
 
-    axs[0, 0].set_ylabel(r'$\rho u_z$')
-    axs[1, 0].set_ylabel(r'$\rho l_z$')
+    axs[0, 0].set_ylabel(r'$\rho l_z$')
+    axs[1, 0].set_ylabel(r'$\rho u_z$')
 
     fig.supxlabel(r'$\hat{r}$')
 
