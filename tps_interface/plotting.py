@@ -7,9 +7,7 @@ import numpy as np
 
 from matplotlib import pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
-from matplotlib.patches import Ellipse
 
-from .two_d_interface import TwoDInterface, TORCH_LENGTH
 from .model_profiles import ModelProfile
 
 IMAGES_FOLDER = 'images'
@@ -27,41 +25,22 @@ plt.rcParams.update({"font.size": 12,
                      'ytick.minor.size': 0, 'ytick.minor.width': 0})
 
 
-def plot_radius(tdi: TwoDInterface, z_points: list[float]) -> None:
+def plot_radius(z: np.ndarray, r: np.ndarray, z_pts: list[float] = [],
+                filename: str = 'radius.pdf') -> None:
     """Plots the torch radius in units of [cm].
 
     args:
-        tdi: Interface to 2-D dataset
-        z_points: Axial positions to mark with vertical lines [m]
+        z: Axial positions [m]
+        r: Torch radius at the axial positions [m]
+        z_pts: Axial positions to mark with vertical lines [m]
     """
 
     plt.figure(figsize=(5, 2.5))
 
-    for z_ in z_points:
+    for z_ in z_pts:
         plt.axvline(100*z_, ls=':', lw=1.5, color='black')
 
-    z_min = tdi.mesh.bounds[2]
-    z_max = TORCH_LENGTH
-
-    z = np.linspace(z_min, z_max, 500)
-
-    r_grid = np.array([tdi.torch_radius(z_) for z_ in z])
-
-    tdi.clear_radius_cache()
-
-    plt.plot(100*z, 100*r_grid)
-
-    circle = Ellipse((13, 2.625),
-                     width=3.25,
-                     height=0.58,
-                     fill=False, edgecolor='red', lw=1.5)
-    plt.gca().add_patch(circle)
-
-    circle = Ellipse((31.5, 1.9),
-                     width=1.75,
-                     height=1.0,
-                     fill=False, edgecolor='red', lw=1.5)
-    plt.gca().add_patch(circle)
+    plt.plot(100*z, 100*r)
 
     plt.ylim((0.0, 3.0))
 
@@ -75,7 +54,7 @@ def plot_radius(tdi: TwoDInterface, z_points: list[float]) -> None:
 
     plt.tight_layout()
 
-    plt.savefig(join(IMAGES_FOLDER, "radius.pdf"))
+    plt.savefig(join(IMAGES_FOLDER, filename))
     plt.close()
 
 
@@ -93,7 +72,7 @@ def plot_cs_integral(z: np.ndarray, cs_integral: np.ndarray, var: str,
 
     plt.figure(figsize=(5, 3))
 
-    plt.plot(100*z, cs_integral)
+    plt.plot(100*z, cs_integral, marker='.')
 
     ylbl = r'$\left \langle ' + var + r'\right \rangle$'
     plt.ylabel(ylbl)

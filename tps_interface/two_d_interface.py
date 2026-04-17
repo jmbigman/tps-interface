@@ -1,9 +1,11 @@
 """Class to open a .pvtu file or equivalent and evaluate quantities relevant to
 the 1-D governing equations."""
 
-from typing import Callable
+from typing import Callable, Literal
 
 import numpy as np
+
+from scipy.ndimage import gaussian_filter1d
 
 import h5py
 
@@ -165,24 +167,6 @@ class TwoDInterface:
 
         # Left point is always in the domain
         return r_l
-
-    def save_torch_radius(self, filename: str, n_points: int,
-                          z_max: float = TORCH_LENGTH) -> None:
-        """Saves the torch radius as an HDF5 file.
-
-        args:
-            filename: Name of HDF5 file
-            n_points: Number of axial points
-            z_max: Maximum axial position
-        """
-
-        z = np.linspace(self.z_min, z_max, n_points)
-        r = np.array([self.torch_radius(z_) for z_ in z], dtype=float)
-
-        with h5py.File(filename, 'w') as f:
-            f.create_dataset('axial position', data=z)
-            f.create_dataset('torch radius', data=r)
-            f.attrs['units'] = 'm'
 
     def __call__(self, field: str, r: float, z: float) -> float | np.ndarray:
         """Evaluates a field at the given position.
@@ -374,14 +358,15 @@ def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
 
 
 def step_finder(tdi: TwoDInterface, z_l: float, z_r: float,
-                verbose: bool = True) -> float:
-    """Locates the step by finding the axial location with the maximum
-    torch radius derivative within a given window.
+                rtol: float, verbose: bool = True) -> float:
+    """Locates the step using a binary search-like algorithm within a given
+    window.
 
     args:
         tdi: Interface to 2-D dataset
         z_l: Left bound of step region
         z_r: Right bound of step region
+        rtol: Relative tolerance for step location, compared to original window
         verbose: Indicator to print the result, optional. Default is True.
 
     returns:
@@ -391,27 +376,128 @@ def step_finder(tdi: TwoDInterface, z_l: float, z_r: float,
     if z_l >= z_r:
         raise ValueError("z_l < z_r required")
 
-    # Coarse search
-    z = np.linspace(z_l, z_r, 100)
+    tr_l = tdi.torch_radius(z_l)
+    tr_r = tdi.torch_radius(z_r)
 
-    r = np.array([tdi.torch_radius(z_) for z_ in z])
+    if np.allclose(tr_l, tr_r, 0.0, 1e-12):
+        raise ValueError("R(z_l) != R(z_r) required")
 
-    dr_dz = np.gradient(r, z, edge_order=2)
+    dz = z_r - z_l
 
-    loc = np.argmax(np.abs(dr_dz))
+    z_avg = 0.5*(z_l + z_r)
+    tr_avg = tdi.torch_radius(z_avg)
 
-    # Refined search
-    z_ref = np.linspace(z[loc-1], z[loc+1], 100)
+    while z_r - z_l > rtol*dz:
 
-    r = np.array([tdi.torch_radius(z_) for z_ in z_ref])
+        # Move boundary to whichever side the radius is closer to
+        if np.abs(tr_avg - tr_l) < np.abs(tr_avg - tr_r):
+            z_l = z_avg
+        else:
+            z_r = z_avg
 
-    dr_dz = np.gradient(r, z_ref, edge_order=2)
-
-    loc = np.argmax(np.abs(dr_dz))
-
-    z_step = z_ref[loc]
+        z_avg = 0.5*(z_l + z_r)
+        tr_avg = tdi.torch_radius(z_avg)
 
     if verbose:
-        print(f"Location of step: {100*z_step:.4f} [cm]")
+        print(f"Location of step: {100*z_avg:.4f} [cm]")
 
-    return z_ref[loc]
+    return z_avg
+
+
+def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
+                      *options, z_max: float = TORCH_LENGTH,
+                      mode: Literal[None, 'no_step', 'smooth'] = None
+                      ) -> tuple[np.ndarray, np.ndarray]:
+    """Saves the torch radius as an HDF5 file, with options for
+    post-processing.
+
+    args:
+        tdi: Interface to 2-D dataset
+        filename: Name of HDF5 file
+        n_points: Number of axial points
+        *options: Additional argument(s) for post-processing mode.
+        z_max: Maximum axial position
+        mode: Post-processing mode, optional. `None` saves the torch radius as
+              is. 'no_step' ignores the step region and requires the left and
+              right boundaries, exclusive, of the step region to be passed as a
+              2 element iterable of floats to *options. 'smooth' applies a
+              Gaussian smoothing filter to the torch radius and requires the
+              FWHM to be passed as a float to *options. The smoothing filter
+              truncates the Gaussian at 3 standard deviations. Default is
+              `None`.
+
+    returns:
+        the axial positions [m]
+        the torch radius [m]
+    """
+
+    z = np.linspace(tdi.z_min, z_max, n_points)
+    r = np.array([tdi.torch_radius(z_) for z_ in z], dtype=float)
+
+    if mode is None:
+
+        r_d = np.gradient(r, z, edge_order=2)
+
+        extra_attrs = {}
+        pass
+
+    elif mode == 'no_step':
+
+        if len(options) != 2:
+            raise ValueError("options must have 2 elements for \'no_step\'")
+
+        z_l, z_r = options
+
+        if not isinstance(z_l, float) or not isinstance(z_r, float):
+            raise TypeError("options must be floats for \'no_step\'")
+
+        mask = (z_l < z)*(z < z_r)
+
+        # Use straight line over the region
+        r[mask] = r[mask][0]
+
+        r_d = np.gradient(r, z, edge_order=2)
+
+        extra_attrs = {'mode': 'no_step',
+                       'left boundary': z_l,
+                       'right boundary': z_r}
+
+    elif mode == 'smooth':
+
+        if len(options) != 1:
+            raise ValueError("options must have 1 element for \'smooth\'")
+
+        fwhm = options[0]
+
+        if not isinstance(fwhm, float):
+            raise TypeError("FWHM must be a float")
+
+        if fwhm <= 0:
+            raise ValueError("FWHM must be positive")
+
+        dz = z[1] - z[0]
+
+        # Convert from FWHM in physical units to standard deviation in data
+        # units and round up for an integer
+        sig_d = np.ceil(fwhm/(2*np.sqrt(2*np.log(2))*dz))
+
+        r = gaussian_filter1d(r, sig_d, mode='nearest', truncate=3)
+
+        r_d = gaussian_filter1d(r, sig_d, order=1, mode='nearest', truncate=3)
+
+        extra_attrs = {'mode': 'smooth',
+                       'fwhm': fwhm}
+
+    else:
+        raise KeyError('Post-processing mode must be None, \'no-step\', or '
+                       + '\'smooth\'')
+
+    with h5py.File(filename, 'w') as f:
+        f.create_dataset('axial position', data=z)
+        f.create_dataset('torch radius', data=r)
+        f.create_dataset('torch radius derivative', data=r_d)
+        f.attrs['units'] = 'm'
+
+        f.attrs.update(extra_attrs)
+
+    return z, r

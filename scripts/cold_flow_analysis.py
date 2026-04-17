@@ -4,6 +4,8 @@ from os.path import join
 
 from argparse import ArgumentParser, BooleanOptionalAction
 
+from dataclasses import dataclass
+
 import numpy as np
 
 import pyvista as pv
@@ -13,7 +15,7 @@ from matplotlib.ticker import AutoMinorLocator, LogLocator
 
 from tps_interface import TwoDInterface, time_statistics, TORCH_LENGTH, \
     step_finder, N_POINTS, plot_radius, plot_cs_integral, plot_profiles, \
-    IMAGES_FOLDER, fit_profile, sample_profile
+    IMAGES_FOLDER, fit_profile, sample_profile, save_torch_radius
 from tps_interface.model_profiles import angular, axial, save_parameters, \
     save_cs_integrals
 
@@ -34,6 +36,82 @@ def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
     mesh.point_data['vel_z'] = mesh.point_data['velocity'][:, 1]
 
     return mesh
+
+
+@dataclass(frozen=True)
+class AngularJump:
+    """Stores information on the jump in angular momentum due to the torch
+    radius discontinuity.
+
+    args:
+        adv_l: Advective flux of angular momentum on the left side
+        adv_r: Advective flux of angular momentum on the right side
+        diff_l: Diffusive flux of angular momentum on the left side
+        diff_r: Diffusive flux of angular momentum on the right side
+    """
+
+    adv_l: float
+    adv_r: float
+    diff_l: float
+    diff_r: float
+
+    def adv_jump(self) -> float:
+        """Jump in advective flux across the discontinuity."""
+        return self.adv_r - self.adv_l
+
+    def diff_jump(self) -> float:
+        """Jump in diffusive flux across the discontinuity."""
+        return self.diff_r - self.diff_l
+
+    def jump(self) -> float:
+        """Jump in total flux across the discontinuity."""
+        return self.adv_jump() + self.diff_jump()
+
+
+def _angular_jump(z_l: float, z_r: float, tdi: TwoDInterface, nu: float
+                  ) -> AngularJump:
+    """Calculates the difference in the angular momentum flux across the torch
+    radius discontinuity.
+
+    args:
+        z_l: Axial position left of the torch radius discontinuity [m]
+        z_r: Axial position right of the torch radius discontinuity [m]
+        tdi: Interface to 2-D data
+        nu: Kinematic viscosity [m^2/s]
+
+    returns:
+        an `AngularJump` instance describing the angular momentum flux at the
+        discontinuity
+    """
+
+    adv_flux = []
+    diff_flux = []
+
+    # Infinitesimal for first order derivative approximation
+    dz = 1e-8
+    sign = {z_l: -1.0, z_r: 1.0}
+
+    for z in [z_l, z_r]:
+
+        r = tdi.torch_radius(z)
+
+        ang_prof, ang = tdi.radial_profile('ang_m_avg', z)
+        ax_prof, ax = tdi.radial_profile('vel_z_avg', z)
+
+        r_pts = np.linspace(0.0, 1.0, ang_prof.size)
+
+        adv = 2*np.pi*np.trapezoid(r_pts*ang_prof*ax_prof, r_pts)
+        adv *= ang
+        adv *= ax
+        adv /= (np.pi*r**2)**2
+
+        adv_flux.append(adv)
+
+        # First order derivative approximation
+        ang_d = tdi.cs_integral('ang_m_avg', z + sign[z]*dz)
+        diff_flux.append(-nu*sign[z]*(ang - ang_d)/dz)
+
+    return AngularJump(*adv_flux, *diff_flux)
 
 
 def _plot_parameters(z: np.ndarray, ang_params: np.ndarray,
@@ -183,18 +261,35 @@ if __name__ == '__main__':
 
     tdi = TwoDInterface(mesh)
 
-    tdi.save_torch_radius('1d_geometry.h5', 500)
+    z, r = save_torch_radius(tdi, '1d_geometry.h5', 500)
+    plot_radius(z, r, filename='original.pdf')
+    z, r = save_torch_radius(tdi, '1d_geometry_no_step.h5', 500, 0.11, 0.15,
+                             mode='no_step')
+    plot_radius(z, r, filename='no_step.pdf')
+    z, r = save_torch_radius(tdi, '1d_geometry_smooth.h5', 500, 2.5e-3,
+                             mode='smooth')
+    plot_radius(z, r, filename='smooth.pdf')
 
     # Example z locations
     z_list = [0.05, 0.13, 0.22, 0.32]
 
     _plot_profile_grid(z_list, tdi)
 
-    _ = step_finder(tdi, 0.12, 0.13, verbose=True)
+    z_step = step_finder(tdi, 0.12, 0.13, 1e-12, verbose=True)
 
-    plot_radius(tdi, z_list)
+    ang_j = _angular_jump(z_step - 1e-12, z_step + 1e-12, tdi,
+                          3.77e-5/1.62277)
 
-    z = np.linspace(tdi.z_min, TORCH_LENGTH, 100)
+    print(f"Jump in advective flux: {ang_j.adv_jump()}")
+    print(f"Jump in diffusive flux: {ang_j.diff_jump()}")
+    print(f"Jump in total flux: {ang_j.jump()}")
+
+    # Mesh refined in inlet and step regions
+    z = np.linspace(tdi.z_min, 0.02, 10)
+    z = np.append(z, np.linspace(z.max(), 0.11, 20))
+    z = np.append(z, np.linspace(z.max(), 0.14, 40))
+    z = np.append(z, np.linspace(z.max(), TORCH_LENGTH, 50))
+    z = np.unique(z)
 
     # Angular momentum
 

@@ -3,6 +3,7 @@ from .two_d_interface import time_statistics
 from .two_d_interface import TORCH_LENGTH
 from .two_d_interface import step_finder
 from .two_d_interface import N_POINTS
+from .two_d_interface import save_torch_radius
 
 from .plotting import plot_radius
 from .plotting import plot_cs_integral
@@ -17,6 +18,7 @@ __all__ = [TwoDInterface,
            TORCH_LENGTH,
            step_finder,
            N_POINTS,
+           save_torch_radius,
            plot_radius,
            plot_cs_integral,
            plot_profiles,
