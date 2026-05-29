@@ -277,6 +277,47 @@ class TwoDInterface:
         """
         return self.radial_profile(field, z, n_points)[1]
 
+    def cs_uncertainty(self, field_std: str, z: float,
+                       n_points: int = N_POINTS) -> float:
+        """Evaluates the uncertainty of the cross-sectional integral of a field
+        at the given axial position. Assuming each point is uncorrelated, the
+        uncertainty of the cross-sectional integral due to pointwise
+        uncertainty is:
+
+            sigma_⟨q⟩^2 = 2π ⟨sigma_q^2 r⟩ = 4π^2 int_0^R sigma_q^2 r^2 dr.
+
+        args:
+            field_std: Name of the standard deviation of the field
+            z: Axial position
+            n_points: Number of uniform sample points along the line, optional.
+
+        returns:
+            the uncertainty in the cross-sectional integral
+        """
+
+        self._field_check(field_std)
+
+        mesh = self._mesh
+
+        torch_r = self.torch_radius(z)
+
+        r_hat = np.linspace(0.0, 1.0, n_points)
+
+        r_pts = r_hat*torch_r
+
+        # (NOTE): Line is formed based on normalized radius coordinates
+        #         for consistency
+
+        line = _make_line(np.array([0.0, z, 0.0]),
+                          np.array([torch_r, z, 0.0]),
+                          r_hat)
+
+        std_values = line.sample(mesh).point_data[field_std]
+
+        integral_sq = 4*np.pi**2*np.trapezoid((r_pts*std_values)**2, r_pts)
+
+        return np.sqrt(integral_sq)
+
 
 def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
                     field_names: list[str] = None,
@@ -484,6 +525,7 @@ def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
         r = gaussian_filter1d(r, sig_d, mode='nearest', truncate=3)
 
         r_d = gaussian_filter1d(r, sig_d, order=1, mode='nearest', truncate=3)
+        r_d /= dz
 
         extra_attrs = {'mode': 'smooth',
                        'fwhm': fwhm}

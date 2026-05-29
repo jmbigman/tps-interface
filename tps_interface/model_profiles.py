@@ -54,22 +54,29 @@ def relative_error(r_hat: np.ndarray, data: np.ndarray, model: np.ndarray) \
 
 
 def sample_profile(tdi: TwoDInterface, field: str, z: np.ndarray,
-                   n_points: int = N_POINTS) -> tuple[np.ndarray, np.ndarray]:
+                   n_points: int = N_POINTS, field_std: str = None
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Samples the quantity profiles at the axial positions.
 
     args:
         tdi: Interface to 2-D dataset
-        field: Field name (to be fit against)
+        field: Field name (to be sampled)
         z: Axial positions [m]
         n_points: Number of sample points in radial profile, optional.
+        field_std: Name of standard deviation of the sampled field, optional.
+                   If passed, the uncertainties in the cross-sectional
+                   integrals are returned too. Default is None.
 
     returns:
         The radial profiles,
-        the cross-sectional integrals
+        the cross-sectional integrals,
+        the uncertainties in the cross-sectional integrals if specified,
+            otherwise None is returned
     """
 
     prof_list = []
     integral_list = []
+    u_list = []
 
     for z_ in z:
 
@@ -78,12 +85,20 @@ def sample_profile(tdi: TwoDInterface, field: str, z: np.ndarray,
         prof_list.append(prof)
         integral_list.append(integral)
 
-    return np.array(prof_list), np.array(integral_list)
+        if field_std is not None:
+            uncertainty = tdi.cs_uncertainty(field_std, z_, n_points)
+            u_list.append(uncertainty)
+
+    u_list = None if field_std is None else np.array(u_list)
+
+    return np.array(prof_list), np.array(integral_list), u_list
 
 
 def fit_profile(tdi: TwoDInterface, field: str, z: np.ndarray,
-                n_points: int = N_POINTS, model: ModelProfile = None) \
-                    -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                n_points: int = N_POINTS, model: ModelProfile = None,
+                field_std: str = None) -> tuple[np.ndarray, np.ndarray,
+                                                np.ndarray, np.ndarray,
+                                                np.ndarray, np.ndarray | None]:
     """Samples the quantity profiles at the axial positions and fits the
     model profile parameters.
 
@@ -93,19 +108,28 @@ def fit_profile(tdi: TwoDInterface, field: str, z: np.ndarray,
         z: Axial positions [m]
         n_points: Number of sample points in radial profile
         model: Model profile to curve fit
+        field_std: Name of standard deviation of the sampled field, optional.
+                If passed, the uncertainties in the cross-sectional integrals
+                are returned too. Default is None.
 
     returns:
-        The radial profiles,
+        the radial profiles,
         the optimal parameters at the axial positions,
+        the uncertainty of the parameters at the axial positions,
         the relative errors,
-        the cross-sectional integrals
+        the cross-sectional integrals,
+        the uncertainties in the cross-sectional integrals if specified,
+            otherwise None is returned
     """
 
-    profs, integrals = sample_profile(tdi, field, z, n_points)
+    (profs,
+     integrals,
+     integrals_u) = sample_profile(tdi, field, z, n_points, field_std)
 
     r_hat = np.linspace(0.0, 1.0, n_points)
 
     params_list = []
+    params_u_list = []
     rel_err_list = []
 
     for prof in profs:
@@ -122,9 +146,11 @@ def fit_profile(tdi: TwoDInterface, field: str, z: np.ndarray,
         model_eval = model(r_hat, *cf_result[0])
 
         params_list.append(cf_result[0])
+        params_u_list.append(np.sqrt(np.diag(cf_result[1])))
         rel_err_list.append(relative_error(r_hat, prof, model_eval))
 
-    return profs, np.array(params_list), np.array(rel_err_list), integrals
+    return profs, np.array(params_list), np.array(params_u_list), \
+        np.array(rel_err_list), integrals, integrals_u
 
 
 def save_parameters(z: np.ndarray, params: np.ndarray, names: list[str],

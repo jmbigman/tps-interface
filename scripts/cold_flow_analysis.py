@@ -4,8 +4,6 @@ from os.path import join
 
 from argparse import ArgumentParser, BooleanOptionalAction
 
-from dataclasses import dataclass
-
 import numpy as np
 
 import pyvista as pv
@@ -14,10 +12,13 @@ from matplotlib import pyplot as plt
 from matplotlib.ticker import AutoMinorLocator, LogLocator
 
 from tps_interface import TwoDInterface, time_statistics, TORCH_LENGTH, \
-    step_finder, N_POINTS, plot_radius, plot_cs_integral, plot_profiles, \
+    step_finder, plot_radius, plot_cs_integral, plot_profiles, \
     IMAGES_FOLDER, fit_profile, sample_profile, save_torch_radius
 from tps_interface.model_profiles import angular, axial, save_parameters, \
     save_cs_integrals
+
+# (TODO):
+# Plot cross-sectional integrals with error, need to propagate the error
 
 
 def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
@@ -36,82 +37,6 @@ def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
     mesh.point_data['vel_z'] = mesh.point_data['velocity'][:, 1]
 
     return mesh
-
-
-@dataclass(frozen=True)
-class AngularJump:
-    """Stores information on the jump in angular momentum due to the torch
-    radius discontinuity.
-
-    args:
-        adv_l: Advective flux of angular momentum on the left side
-        adv_r: Advective flux of angular momentum on the right side
-        diff_l: Diffusive flux of angular momentum on the left side
-        diff_r: Diffusive flux of angular momentum on the right side
-    """
-
-    adv_l: float
-    adv_r: float
-    diff_l: float
-    diff_r: float
-
-    def adv_jump(self) -> float:
-        """Jump in advective flux across the discontinuity."""
-        return self.adv_r - self.adv_l
-
-    def diff_jump(self) -> float:
-        """Jump in diffusive flux across the discontinuity."""
-        return self.diff_r - self.diff_l
-
-    def jump(self) -> float:
-        """Jump in total flux across the discontinuity."""
-        return self.adv_jump() + self.diff_jump()
-
-
-def _angular_jump(z_l: float, z_r: float, tdi: TwoDInterface, nu: float
-                  ) -> AngularJump:
-    """Calculates the difference in the angular momentum flux across the torch
-    radius discontinuity.
-
-    args:
-        z_l: Axial position left of the torch radius discontinuity [m]
-        z_r: Axial position right of the torch radius discontinuity [m]
-        tdi: Interface to 2-D data
-        nu: Kinematic viscosity [m^2/s]
-
-    returns:
-        an `AngularJump` instance describing the angular momentum flux at the
-        discontinuity
-    """
-
-    adv_flux = []
-    diff_flux = []
-
-    # Infinitesimal for first order derivative approximation
-    dz = 1e-8
-    sign = {z_l: -1.0, z_r: 1.0}
-
-    for z in [z_l, z_r]:
-
-        r = tdi.torch_radius(z)
-
-        ang_prof, ang = tdi.radial_profile('ang_m_avg', z)
-        ax_prof, ax = tdi.radial_profile('vel_z_avg', z)
-
-        r_pts = np.linspace(0.0, 1.0, ang_prof.size)
-
-        adv = 2*np.pi*np.trapezoid(r_pts*ang_prof*ax_prof, r_pts)
-        adv *= ang
-        adv *= ax
-        adv /= (np.pi*r**2)**2
-
-        adv_flux.append(adv)
-
-        # First order derivative approximation
-        ang_d = tdi.cs_integral('ang_m_avg', z + sign[z]*dz)
-        diff_flux.append(-nu*sign[z]*(ang - ang_d)/dz)
-
-    return AngularJump(*adv_flux, *diff_flux)
 
 
 def _plot_parameters(z: np.ndarray, ang_params: np.ndarray,
@@ -180,56 +105,26 @@ def _plot_relative_error(z: np.ndarray, ang_rel: np.ndarray,
     plt.close()
 
 
-def _plot_profile_grid(z_list: list[float], tdi: TwoDInterface) -> None:
-    """Plots the angular and axial momenta and their optimally fitted profiles
-    at four relevant axial positions.
+def _mean_std(z: np.ndarray, f: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Evaluates the mean and standard deviation of the quantity.
 
     args:
-        z_list: List of relevant axial positions [m]
-        tdi: Interface to 2-D data
+        z: Axial positions [m]
+        f: Evaluated quantity at the axial positions
+
+    returns:
+        the mean, the standard deviation
     """
 
-    fig, axs = plt.subplots(2, 4, sharex=True, figsize=(6, 3))
+    length = z[-1] - z[0]
 
-    for ax in axs.flat:
-        ax.set_box_aspect(1)
+    f = f.flatten()
 
-    axs[0, 0].set_xticks([0.0, 0.5, 1.0], [r'$0$', r'$0.5$', r'$1$'])
+    mean = np.trapezoid(f, z)/length
 
-    r_hat = np.linspace(0.0, 1.0, N_POINTS)
+    std = np.sqrt(np.trapezoid((f - mean)**2, z)/length)
 
-    ang_profs, ang_params, _, _ = fit_profile(tdi, 'ang_m_avg',
-                                              np.array(z_list), model=angular)
-
-    ax_profs, ax_params, _, _ = fit_profile(tdi, 'vel_z_avg',
-                                            np.array(z_list), model=axial)
-
-    for i in range(4):
-
-        axs[0, i].set_title(f'${100*z_list[i]:.0f}' + r'\, \mathrm{cm}$')
-
-        axs[0, i].plot(r_hat, ang_profs[i], ls='-', color='black')
-        axs[0, i].plot(r_hat, angular(r_hat, *ang_params[i]), ls='--',
-                       color='tab:red')
-        axs[0, i].grid()
-
-        axs[1, i].plot(r_hat, ax_profs[i], ls='-', color='black')
-        axs[1, i].plot(r_hat, axial(r_hat, *ax_params[i]), ls='--',
-                       color='tab:red')
-        axs[1, i].grid()
-
-    axs[0, 0].set_ylabel(r'$\rho l_z$')
-    axs[1, 0].set_ylabel(r'$\rho u_z$')
-
-    fig.supxlabel(r'$\hat{r}$')
-
-    plt.tight_layout()
-
-    fig.subplots_adjust(bottom=0.13,  left=0.1, top=0.95,
-                        hspace=0.05, wspace=0.5)
-
-    plt.savefig(join(IMAGES_FOLDER, 'profile_grid.pdf'))
-    plt.close()
+    return mean, std
 
 
 parser = ArgumentParser(description="Analysis of 2-D cold flow data")
@@ -261,54 +156,88 @@ if __name__ == '__main__':
 
     tdi = TwoDInterface(mesh)
 
-    z, r = save_torch_radius(tdi, '1d_geometry.h5', 500)
+    print("Saving and plotting torch radius")
+
+    z, r = save_torch_radius(tdi, '1d_geometry.h5', 2000)
     plot_radius(z, r, filename='original.pdf')
-    z, r = save_torch_radius(tdi, '1d_geometry_no_step.h5', 500, 0.11, 0.15,
+    z, r = save_torch_radius(tdi, '1d_geometry_no_step.h5', 2000, 0.11, 0.15,
                              mode='no_step')
     plot_radius(z, r, filename='no_step.pdf')
-    z, r = save_torch_radius(tdi, '1d_geometry_smooth.h5', 500, 2.5e-3,
+    z, r = save_torch_radius(tdi, '1d_geometry_smooth.h5', 2000, 2.5e-3,
                              mode='smooth')
     plot_radius(z, r, filename='smooth.pdf')
 
-    # Example z locations
-    z_list = [0.05, 0.13, 0.22, 0.32]
-
-    _plot_profile_grid(z_list, tdi)
-
     z_step = step_finder(tdi, 0.12, 0.13, 1e-12, verbose=True)
-
-    ang_j = _angular_jump(z_step - 1e-12, z_step + 1e-12, tdi,
-                          3.77e-5/1.62277)
-
-    print(f"Jump in advective flux: {ang_j.adv_jump()}")
-    print(f"Jump in diffusive flux: {ang_j.diff_jump()}")
-    print(f"Jump in total flux: {ang_j.jump()}")
 
     # Mesh refined in inlet and step regions
     z = np.linspace(tdi.z_min, 0.02, 10)
-    z = np.append(z, np.linspace(z.max(), 0.11, 20))
-    z = np.append(z, np.linspace(z.max(), 0.14, 40))
-    z = np.append(z, np.linspace(z.max(), TORCH_LENGTH, 50))
+    z = np.append(z, np.linspace(z.max(), 0.11, 10))
+    z = np.append(z, np.linspace(z.max(), 0.14, 20))
+    z = np.append(z, np.linspace(z.max(), TORCH_LENGTH, 40))
     z = np.unique(z)
 
     # Angular momentum
+    print("Evaluating angular momentum cross-sectional integral and"
+          + " parameters")
 
-    ang_profs, ang_params, ang_rel, ang_cs = fit_profile(tdi, 'ang_m_avg', z,
-                                                         model=angular)
+    (ang_profs,
+     ang_params,
+     ang_params_u,
+     ang_rel,
+     ang_cs,
+     ang_cs_u) = fit_profile(tdi, 'ang_m_avg', z, model=angular,
+                             field_std='ang_m_std')
 
-    plot_cs_integral(z, ang_cs, r'r u_\theta', 'ang_m_avg')
+    sample_profile(tdi, "ang_m_std", z)
+
+    plot_cs_integral(z, ang_cs, r'r u_\theta', 'ang_m_avg', ang_cs_u)
 
     plot_profiles(z, ang_profs, r'r u_\theta', 'ang_m_avg', angular,
                   ang_params)
 
+    print("Angular parameter a")
+    print(f"\tMinimum: {ang_params.min()}")
+    print(f"\tMaximum: {ang_params.max()}")
+
+    mean, std = _mean_std(z, ang_params)
+
+    print(f"\tMean: {mean}")
+    print(f"\tStandard deviation: {std}")
+
     # Axial momentum
+    print("Evaluating axial momentum cross-sectional integral and parameters")
 
-    ax_profs, ax_params, ax_rel, ax_cs = fit_profile(tdi, 'vel_z_avg', z,
-                                                     model=axial)
+    (ax_profs,
+     ax_params,
+     ax_params_u,
+     ax_rel,
+     ax_cs,
+     ax_cs_u) = fit_profile(tdi, 'vel_z_avg', z, model=axial,
+                            field_std='vel_z_std')
 
-    plot_cs_integral(z, ax_cs, 'u_z', 'vel_z_avg')
+    plot_cs_integral(z, ax_cs, 'u_z', 'vel_z_avg', ax_cs_u)
 
     plot_profiles(z, ax_profs, 'u_z', 'vel_z_avg', axial, ax_params)
+
+    print("Axial parameter b")
+    print(f"\tMinimum: {ax_params[:, 0].min()}")
+    print(f"\tMaximum: {ax_params[:, 0].max()}")
+
+    mean, std = _mean_std(z, ax_params[:, 0])
+
+    print(f"\tMean: {mean}")
+    print(f"\tStandard deviation: {std}")
+
+    print("Axial parameter log(c)")
+    log_param = np.log(ax_params[:, 1])
+
+    print(f"\tMinimum: {log_param.min()}")
+    print(f"\tMaximum: {log_param.max()}")
+
+    mean, std = _mean_std(z, log_param)
+
+    print(f"\tMean: {mean}")
+    print(f"\tStandard deviation: {std}")
 
     # Axial development of parameters and relative error
 
@@ -318,9 +247,10 @@ if __name__ == '__main__':
 
     # Radial momentum
 
-    rad_profs, rad_cs = sample_profile(tdi, 'vel_r_avg', z)
+    rad_profs, rad_cs, rad_cs_u = sample_profile(tdi, 'vel_r_avg', z,
+                                                 field_std='vel_r_std')
 
-    plot_cs_integral(z, rad_cs, 'u_r', 'vel_r_avg')
+    plot_cs_integral(z, rad_cs, 'u_r', 'vel_r_avg', rad_cs_u)
 
     plot_profiles(z, rad_profs, 'u_r', 'vel_r_avg')
 

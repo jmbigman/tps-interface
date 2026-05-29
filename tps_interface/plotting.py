@@ -59,7 +59,7 @@ def plot_radius(z: np.ndarray, r: np.ndarray, z_pts: list[float] = [],
 
 
 def plot_cs_integral(z: np.ndarray, cs_integral: np.ndarray, var: str,
-                     field: str) -> None:
+                     field: str, cs_integral_u: np.ndarray = None) -> None:
     """Plots the axial development of the cross-sectional integral of the given
     field.
 
@@ -68,11 +68,17 @@ def plot_cs_integral(z: np.ndarray, cs_integral: np.ndarray, var: str,
         cs_integral: Cross-sectional integral of quantity
         var: LaTeX for quantity being plotted
         field: Field name. Used to name output file.
+        cs_integral_u: Uncertainty in the cross-sectional integral of the
+                       quantity, optional. Default is None.
     """
 
     plt.figure(figsize=(5, 3))
 
-    plt.plot(100*z, cs_integral, marker='.')
+    plt.plot(100*z, cs_integral)
+
+    if cs_integral_u is not None:
+        plt.fill_between(100*z, cs_integral - cs_integral_u,
+                         cs_integral + cs_integral_u, alpha=0.3)
 
     ylbl = r'$\left \langle ' + var + r'\right \rangle$'
     plt.ylabel(ylbl)
