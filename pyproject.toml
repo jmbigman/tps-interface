@@ -13,7 +13,8 @@ dependencies = [
     "scipy",
     "matplotlib",
     "h5py",
-    "flake8"
+    "flake8",
+    "jaxtyping"
 ]
 
 [tool.setuptools.packages.find]

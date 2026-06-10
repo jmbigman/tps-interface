@@ -1,34 +1,46 @@
 """Class to open a .pvtu file or equivalent and evaluate quantities relevant to
 the 1-D governing equations."""
 
+from os import makedirs
+from os.path import exists, join
+
 from typing import Callable, Literal
 
 import numpy as np
 
 from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import curve_fit
 
 import h5py
 
 import pyvista as pv
 
-# Torch length from 2-D inlet condition to end of nozzle [m]
-TORCH_LENGTH = 0.34
+# This is a generic array annotation library, not just for JAX
+from jaxtyping import Real
+
+from .models import Model
+from ._utils import TORCH_LENGTH
+
+Array = np.ndarray
+
+
+# --------------------------------------------------------------------------- #
+# This class is the main driver and contains all basic functionality
+# --------------------------------------------------------------------------- #
 
 # Default number of points for radial sampling
 N_POINTS = 100
 
-# Operator acting on UnstructuredGrid
-UnstructuredGridOperator = Callable[[pv.UnstructuredGrid], pv.UnstructuredGrid]
 
-
-def _make_line(start: np.ndarray, end: np.ndarray, parameterized: np.ndarray) \
-     -> pv.PolyData:
+def _make_line(start: Real[Array, "3"], end: Real[Array, "3"],
+               parameter: Real[Array, " n_pts"]) -> pv.PolyData:
     """Forms a line with non-uniform sampling.
 
     args:
-        start: Position of line start
-        end: Position of line end
-        parameterized: Sampling parameter in [0, 1]
+        start: Position of line start (x, y, z)
+        end: Position of line end (x, y, z)
+        parameter: Sampling parameter in [0, 1]. Determines where the line
+                   segment between the start and end points is sampled.
 
     returns:
         The line with sample points
@@ -46,13 +58,17 @@ def _make_line(start: np.ndarray, end: np.ndarray, parameterized: np.ndarray) \
     if end.size != 3:
         raise ValueError("end must have 3 entries")
 
-    if parameterized.ndim != 1:
-        raise ValueError("parameterized must be 1-D")
+    if parameter.ndim != 1:
+        raise ValueError("parameter must be 1-D")
 
-    if np.any(parameterized != np.unique(parameterized)):
-        raise ValueError("parameterized must be increasing without repeats")
+    if np.any(parameter != np.unique(parameter)):
+        raise ValueError("parameter must be increasing without repeats")
 
-    return pv.PolyData(start + np.outer(parameterized, end - start))
+    return pv.PolyData(start + np.outer(parameter, end - start))
+
+
+# (NOTE): The `TwoDInterface` methods are vectorized using NumPy vectorize,
+#         which is convenient but not particularly efficient
 
 
 class TwoDInterface:
@@ -63,12 +79,19 @@ class TwoDInterface:
     args:
         mesh: The 2-D data (for a single time point)
         rtol: Relative tolerance convergence criterion for torch radius
+        n_points: Number of points to use in radial sampling of fields,
+                  optional. Default is 100.
     """
 
     # Cache torch radii
-    _radius_cache = {}
+    _radius_cache: dict[float, float] = {}
 
-    def __init__(self, mesh: pv.UnstructuredGrid = None, rtol: float = 1e-7):
+    n_points: int
+
+    _r_norm: Real[Array, "n_points"]
+
+    def __init__(self, mesh: pv.UnstructuredGrid = None, rtol: float = 1e-7,
+                 n_points: int = N_POINTS):
 
         self._mesh = mesh
         self._rtol = rtol
@@ -76,6 +99,25 @@ class TwoDInterface:
         if rtol < 1e-7:
             print('rtol of 1e-7 generally works well. Smaller tolerances do '
                   + 'not always converge.')
+
+        self.n_points = n_points
+
+        if not isinstance(n_points, int):
+            raise TypeError("n_points must be an integer")
+
+        if n_points < 3:
+            raise ValueError("n_points must be at least 3")
+
+        self._r_norm = np.linspace(0.0, 1.0, n_points)
+
+        # Vectorize methods
+        self.torch_radius = np.vectorize(self.torch_radius)
+        self.wall_value = np.vectorize(self.wall_value, excluded=[0])
+        self.radial_sample = np.vectorize(self.radial_sample, excluded=[0],
+                                          signature='()->(n)')
+        self.radial_profile = np.vectorize(self.radial_profile, excluded=[0],
+                                           signature='()->(n),()')
+        self.cs_integral = np.vectorize(self.cs_integral, excluded=[0])
 
     @property
     def mesh(self) -> pv.UnstructuredGrid:
@@ -101,7 +143,7 @@ class TwoDInterface:
         self._radius_cache = {}
 
     @property
-    def field_names(self) -> None:
+    def field_names(self) -> list[str]:
         """Names of point data fields"""
         return self._mesh.point_data.keys()
 
@@ -111,11 +153,12 @@ class TwoDInterface:
         args:
             field: Field name
         """
+
         if field not in self.field_names:
             msg = "Specified field is not in the dataset"
             raise RuntimeError(msg)
 
-    def torch_radius(self, z: float) -> float:
+    def torch_radius(self, z: Real[Array, "..."]) -> Real[Array, "..."]:
         """Finds the torch radius at one axial position by bisection. Returns
         a point guaranteed to be inside the domain, but it is possible it is
         not exactly at the torch wall.
@@ -124,7 +167,7 @@ class TwoDInterface:
             z: Axial position
 
         returns:
-            The torch radius
+            the torch radius
         """
 
         radius_cache = self._radius_cache
@@ -168,7 +211,7 @@ class TwoDInterface:
         # Left point is always in the domain
         return r_l
 
-    def __call__(self, field: str, r: float, z: float) -> float | np.ndarray:
+    def __call__(self, field: str, r: float, z: float) -> Real[Array, "..."]:
         """Evaluates a field at the given position.
 
         args:
@@ -177,7 +220,7 @@ class TwoDInterface:
             z: Axial position
 
         returns:
-            The evaluated field
+            the evaluated field
         """
 
         mesh = self._mesh
@@ -196,7 +239,8 @@ class TwoDInterface:
 
         return field_value
 
-    def wall_value(self, field: str, z: float) -> float | np.ndarray:
+    def wall_value(self, field: str, z: Real[Array, "..."]
+                   ) -> Real[Array, "..."]:
         """Evaluates a field at the wall for a given axial position.
 
         args:
@@ -204,7 +248,7 @@ class TwoDInterface:
             z: Axial position
 
         returns:
-            The field evaluated at the wall
+            the wall evaluation
         """
 
         r = self.torch_radius(z)
@@ -213,28 +257,22 @@ class TwoDInterface:
 
         return wall_value
 
-    def radial_profile(self, field: str, z: float, n_points: int = N_POINTS) \
-            -> tuple[np.ndarray, float]:
-        """Evaluates the radial profile of a field at the given axial position.
-        The profile, f, of a quantity, q, is the normalized, dimensionless
-        function
+    @property
+    def r_norm(self) -> Real[Array, "n_points"]:
+        """Uniformly sampled normalized radius."""
+        return self._r_norm
 
-            f(r, z) = pi * R(z)^2 * q(r, z) / ⟨q⟩(z).
-
-        The cross-sectional integral
-
-            ⟨q⟩(z) = 2 * pi * int_0^R(z) q(r, z) * r dr
-
-        is evaluated via trapezoidal rule.
+    def radial_sample(self, field: str, z: float
+                      ) -> Real[Array, "n_points ..."]:
+        """Samples a given field over the torch radius at the given axial
+        position. The field is not normalized or processed in any way.
 
         args:
             field: Field name
             z: Axial position
-            n_points: Number of uniform sample points along the line, optional.
 
         returns:
-            The profile values,
-            the cross-sectional integral
+            the field values
         """
 
         self._field_check(field)
@@ -243,80 +281,74 @@ class TwoDInterface:
 
         torch_r = self.torch_radius(z)
 
-        r_hat = np.linspace(0.0, 1.0, n_points)
-
-        r_pts = r_hat*torch_r
-
         # (NOTE): Line is formed based on normalized radius coordinates
         #         for consistency
 
         line = _make_line(np.array([0.0, z, 0.0]),
                           np.array([torch_r, z, 0.0]),
-                          r_hat)
+                          self.r_norm)
 
         field_values = line.sample(mesh).point_data[field]
 
+        return np.asarray(field_values)
+
+    def radial_profile(self, field: str, z: float
+                       ) -> tuple[Real[Array, "n_points"], float]:
+        """Evaluates the radial profile of a field at the given axial position.
+        The profile, f, of a quantity, q, is the normalized, dimensionless
+        function
+
+            f(r, z) = π * R(z)^2 * q(r, z) / ⟨q⟩(z).
+
+        The cross-sectional integral
+
+            ⟨q⟩(z) = 2π * int_0^R(z) q(r, z) * r dr
+
+        is evaluated via trapezoidal rule.
+
+        args:
+            field: Field name
+            z: Axial position
+
+        returns:
+            The profile values,
+            the cross-sectional integral
+        """
+
+        field_values = self.radial_sample(field, z)
+
+        # The torch radius is cached, so this isn't an additional computation
+        torch_r = self.torch_radius(z)
+
+        r_pts = torch_r*self.r_norm
+
+        # Integrate and normalize
         integral = 2*np.pi*np.trapezoid(r_pts*field_values, r_pts)
 
         prof = np.pi*torch_r**2*field_values/integral
 
         return prof, integral
 
-    def cs_integral(self, field: str, z: float, n_points: int = N_POINTS) \
-            -> float | np.ndarray:
+    def cs_integral(self, field: str, z: float) -> float:
         """Evaluates the cross-sectional integral of a field at the given axial
         position. See `radial_profile` for details.
 
         args:
             field: Field name
             z: Axial position
-            n_points: Number of sample points along the line, optional.
 
         returns:
             The radial integral
         """
-        return self.radial_profile(field, z, n_points)[1]
+        return self.radial_profile(field, z)[1]
 
-    def cs_uncertainty(self, field_std: str, z: float,
-                       n_points: int = N_POINTS) -> float:
-        """Evaluates the uncertainty of the cross-sectional integral of a field
-        at the given axial position. Assuming each point is uncorrelated, the
-        uncertainty of the cross-sectional integral due to pointwise
-        uncertainty is:
 
-            sigma_⟨q⟩^2 = 2π ⟨sigma_q^2 r⟩ = 4π^2 int_0^R sigma_q^2 r^2 dr.
+# --------------------------------------------------------------------------- #
+# Pre-processing
+# --------------------------------------------------------------------------- #
 
-        args:
-            field_std: Name of the standard deviation of the field
-            z: Axial position
-            n_points: Number of uniform sample points along the line, optional.
-
-        returns:
-            the uncertainty in the cross-sectional integral
-        """
-
-        self._field_check(field_std)
-
-        mesh = self._mesh
-
-        torch_r = self.torch_radius(z)
-
-        r_hat = np.linspace(0.0, 1.0, n_points)
-
-        r_pts = r_hat*torch_r
-
-        # (NOTE): Line is formed based on normalized radius coordinates
-        #         for consistency
-
-        line = _make_line(np.array([0.0, z, 0.0]),
-                          np.array([torch_r, z, 0.0]),
-                          r_hat)
-
-        std_values = line.sample(mesh).point_data[field_std]
-
-        integral_sq = 4*np.pi**2*np.trapezoid((r_pts*std_values)**2, r_pts)
-
-        return np.sqrt(integral_sq)
+# Operator acting on UnstructuredGrid
+UnstructuredGridOperator = Callable[[pv.UnstructuredGrid], pv.UnstructuredGrid]
 
 
 def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
@@ -342,9 +374,9 @@ def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
     if t2 == -1:
         t2 = len(reader.time_values) - 1
 
-    ###########################################################################
+    # ----------------------------------------------------------------------- #
     # First time point
-    ###########################################################################
+    # ----------------------------------------------------------------------- #
 
     reader.set_active_time_point(t1)
 
@@ -362,9 +394,9 @@ def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
 
         data[fn] = [mesh.point_data[fn]]
 
-    ###########################################################################
+    # ----------------------------------------------------------------------- #
     # Iterate over remaining time points
-    ###########################################################################
+    # ----------------------------------------------------------------------- #
 
     for t in range(t1+1, t2+1):
 
@@ -376,9 +408,9 @@ def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
 
             data[fn].append(mesh.point_data[fn])
 
-    ###########################################################################
+    # ----------------------------------------------------------------------- #
     # Calculate statistics
-    ###########################################################################
+    # ----------------------------------------------------------------------- #
 
     t_pts = np.array(reader.time_values[t1:t2+1])
     t_int = t_pts[-1] - t_pts[0]
@@ -398,6 +430,11 @@ def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Torch radius analysis
+# --------------------------------------------------------------------------- #
+
+
 def step_finder(tdi: TwoDInterface, z_l: float, z_r: float,
                 rtol: float, verbose: bool = True) -> float:
     """Locates the step using a binary search-like algorithm within a given
@@ -411,7 +448,7 @@ def step_finder(tdi: TwoDInterface, z_l: float, z_r: float,
         verbose: Indicator to print the result, optional. Default is True.
 
     returns:
-        The location of maximum torch radius derivative
+        the location of maximum torch radius derivative
     """
 
     if z_l >= z_r:
@@ -446,7 +483,8 @@ def step_finder(tdi: TwoDInterface, z_l: float, z_r: float,
 
 
 def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
-                      *options, z_max: float = TORCH_LENGTH,
+                      *options, folder: str = 'output',
+                      z_max: float = TORCH_LENGTH,
                       mode: Literal[None, 'no_step', 'smooth'] = None
                       ) -> tuple[np.ndarray, np.ndarray]:
     """Saves the torch radius as an HDF5 file, with options for
@@ -457,6 +495,7 @@ def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
         filename: Name of HDF5 file
         n_points: Number of axial points
         *options: Additional argument(s) for post-processing mode.
+        folder: Output directory, optional. Default is 'output'.
         z_max: Maximum axial position
         mode: Post-processing mode, optional. `None` saves the torch radius as
               is. 'no_step' ignores the step region and requires the left and
@@ -472,8 +511,11 @@ def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
         the torch radius [m]
     """
 
+    if not exists(folder):
+        makedirs(folder)
+
     z = np.linspace(tdi.z_min, z_max, n_points)
-    r = np.array([tdi.torch_radius(z_) for z_ in z], dtype=float)
+    r = tdi.torch_radius(z)
 
     if mode is None:
 
@@ -534,6 +576,8 @@ def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
         raise KeyError('Post-processing mode must be None, \'no-step\', or '
                        + '\'smooth\'')
 
+    filename = join(folder, filename)
+
     with h5py.File(filename, 'w') as f:
         f.create_dataset('axial position', data=z)
         f.create_dataset('torch radius', data=r)
@@ -543,3 +587,190 @@ def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
         f.attrs.update(extra_attrs)
 
     return z, r
+
+
+# --------------------------------------------------------------------------- #
+# Sampling and curve-fitting along axial direction
+# --------------------------------------------------------------------------- #
+
+
+def relative_error(r_norm: Real[Array, " _"], data: Real[Array, " _"],
+                   model: Real[Array, " _"]) -> float:
+    """Calculates the L2 relative error of the model fit. A radial factor is
+    included so the comparison is over the whole cross-section. The trapezoidal
+    rule is used for integration.
+
+    args:
+        r_norm: Normalized radius evaluation points
+        data: Data values
+        model: Model profile values
+
+    returns:
+        the L2 relative error
+    """
+
+    # Norm squared difference
+    abs_diff = np.trapezoid((data - model)**2*r_norm, r_norm)
+    # Norm squared of data
+    scale = np.trapezoid(data**2*r_norm, r_norm)
+
+    return np.sqrt(abs_diff/scale)
+
+
+def fit_profile(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
+                model: Model) -> tuple[Real[Array, " _"], Real[Array, " _"],
+                                       Real[Array, " _"], Real[Array, " _"]]:
+    """Samples the dimensionless radial profiles and curve fits the
+    parameterized model at the axial positions.
+
+    args:
+        tdi: Interface to 2-D dataset
+        field: Field name (to fit against)
+        z: Axial positions [m]
+        model: Model to curve fit
+
+    returns:
+        the radial profiles,
+        the optimal parameters at the axial positions
+        the relative errors,
+        the cross-sectional integrals
+    """
+
+    if not model.profile:
+        raise ValueError("model must be a dimensionless radial profile")
+
+    profs, integrals = tdi.radial_profile(field, z)
+
+    r_norm = tdi.r_norm
+
+    params_list = []
+    rel_err_list = []
+
+    for prof in profs:
+
+        # Error norm should be weighted by the radius for cross-sectional
+        # integral comparison
+        # `curve_fit` takes reciprocal of weights like classical WLS
+        with np.errstate(divide='ignore'):
+            weights = 1.0/r_norm
+
+        cf_result = curve_fit(model, r_norm, prof, sigma=weights,
+                              method='dogbox', ftol=1e-12, xtol=1e-12,
+                              gtol=1e-12)
+
+        model_eval = model(r_norm, *cf_result[0])
+
+        params_list.append(cf_result[0])
+        rel_err_list.append(relative_error(r_norm, prof, model_eval))
+
+    return profs, np.array(params_list), np.array(rel_err_list), integrals
+
+
+def fit_quantity(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
+                 model: Model, **kwargs) -> tuple[Real[Array, " _"],
+                                                  Real[Array, " _"],
+                                                  Real[Array, " _"]]:
+    """Samples the quantity radially and curve fits the parameterized
+    model at the axial positions.
+
+    args:
+        tdi: Interface to 2-D dataset
+        field: Field name (to fit against)
+        z: Axial positions [m]
+        model: Model to curve fit
+        **kwargs: Passed through to SciPy `curve_fit`
+
+    returns:
+        the radially sampled quantity,
+        the optimal parameters at the axial positions
+        the relative errors
+    """
+
+    if model.profile:
+        raise ValueError("model must be a radial quantity")
+
+    values = tdi.radial_sample(field, z)
+
+    r_norm = tdi.r_norm
+
+    params_list = []
+    rel_err_list = []
+
+    for val in values:
+
+        # Error norm should be weighted by the radius for cross-sectional
+        # integral comparison
+        # `curve_fit` takes reciprocal of weights like classical WLS
+        with np.errstate(divide='ignore'):
+            weights = 1.0/r_norm
+
+        cf_result = curve_fit(model, r_norm, val, sigma=weights, **kwargs)
+
+        model_eval = model(r_norm, *cf_result[0])
+
+        params_list.append(cf_result[0])
+        rel_err_list.append(relative_error(r_norm, val, model_eval))
+
+    return values, np.array(params_list), np.array(rel_err_list)
+
+
+def save_axial(z: Real[Array, " _"], quantities: Real[Array, " _ _"],
+               names: list[str], fname: str,
+               descs: list[str | None] | None = None,
+               units: list[str | None] | None = None) -> None:
+    """Saves quantities along the axial coordinate in HDF5 format.
+
+    args:
+        z: Axial coordinates [m]
+        quantities: Quantities to save along axial coordinate. Shape should be
+                    (n_qty, n_z)
+        names: Quantity names
+        fname: Output file name
+        descs: Quantity descriptions, optional. Default is None. If passed,
+               must be a list of strings and/or None.
+        units: Quantity units, optional. Default is None. If passed, must be a
+               list of strings and/or None.
+    """
+
+    if z.ndim != 1:
+        raise TypeError("z must be 1-D")
+
+    n_z = z.size
+
+    if quantities.ndim != 2:
+        raise TypeError("quantities must be 2-D")
+
+    if quantities.shape[1] != n_z:
+        raise ValueError("quantities must be equal to length of z in second"
+                         + " dimension")
+
+    n_qty = quantities.shape[0]
+
+    # Replace None with list of None
+    descs = [None]*n_qty if descs is None else descs
+    units = [None]*n_qty if units is None else units
+
+    with h5py.File(fname, 'w') as f:
+        z_pos = f.create_dataset('axial position', data=z)
+        z_pos.attrs['units'] = 'm'
+
+        for qty, name, desc, unit in zip(quantities, names, descs, units):
+
+            if not isinstance(name, str):
+                raise TypeError("names must be strings")
+
+            d_set = f.create_dataset(name, data=qty)
+
+            if desc is not None:
+
+                if not isinstance(desc, str):
+                    raise TypeError("descs must be strings")
+
+                d_set.attrs['description'] = desc
+
+            if unit is not None:
+
+                if not isinstance(unit, str):
+                    raise TypeError("units must be strings")
+
+                d_set.attrs['units'] = unit

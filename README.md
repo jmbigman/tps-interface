@@ -19,7 +19,8 @@ pip3 install -e .
 `model_profiles`: Samples radial profiles from `TPS` data and fits parameters in model profiles
 
 ## Scripts
-`cold_flow_analysis.py`: Analyzes time-dependent cold flow data
+`cold_flow.py`: Analyzes time-dependent 2-D cold flow data
+`plasma.py`: Analyzes time-dependent 2-D plasma data
 
 ## Development
 To lint the code, run:
