@@ -5,6 +5,7 @@ from .two_d_interface import step_finder
 from .two_d_interface import N_POINTS
 from .two_d_interface import save_torch_radius
 from .two_d_interface import fit_profile
+from .two_d_interface import fit_deviation
 from .two_d_interface import fit_quantity
 from .two_d_interface import save_axial
 
@@ -22,6 +23,7 @@ __all__ = [TwoDInterface,
            N_POINTS,
            save_torch_radius,
            fit_profile,
+           fit_deviation,
            fit_quantity,
            save_axial,
            plot_radius,

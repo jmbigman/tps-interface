@@ -6,11 +6,10 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+from scipy.optimize import minimize_scalar
 from scipy.special import erfi
 
 from jaxtyping import Real
-
-from ._utils import TEMP_W
 
 Array = np.ndarray
 
@@ -172,18 +171,17 @@ class Axial(Model):
 # --------------------------------------------------------------------------- #
 # Temperature
 #
-# These represent the actual temperature, not the dimensionless profile
+# These are deviations of the temperature from the wall temperature along the
+# radial direction
 # --------------------------------------------------------------------------- #
 
 
-class TempSupEll(Model):
-    """Super ellipse temperature radial function. This is a two parameter model
+class TempPoly(Model):
+    """Polynomial temperature deviation radial function with two parameters
 
-        T(x) = (a - T_w) sqrt(1 - x^b) + T_w
+        f(x) = A (1 + x^a) (1 - x^b).
 
-    where T_w is the wall temperature, a is the maximum temperature, and b >= 2
-    determines the shape. b = 2 corresponds to a circle and as b -> infinity,
-    the profile approaches a square.
+    The normalization coefficient A is determined to ensure max f = 1.
     """
 
     @property
@@ -193,60 +191,33 @@ class TempSupEll(Model):
 
     def __call__(self, x: Real[Array, " _"], a: float, b: float
                  ) -> Real[Array, " _"]:
-        """Evaluates the temperature radial function.
+        """Evaluates the temperature deviation model.
 
         args:
             x: Evaluation points in [0, 1] (normalized radius)
-            a: Maximum temperature
-            b: Shape parameter, b > 1
+            a: First shape parameter, > 1
+            b: Second shape parameter, > 1
 
         returns:
             the evaluated profile
         """
 
-        if b < 2:
-            raise ValueError("shape parameter (b) must be greater than or"
-                             + " equal to 2")
+        if a <= 1 or b <= 1:
+            raise ValueError("Shape parameters (a, b) must be greater than 1")
 
-        return (a - TEMP_W)*np.sqrt(1 - x**b) + TEMP_W
+        # Calculate normalization coefficient
+        if a >= b:
+            # Maximum occurs at x = 0 and f(0) = 1
+            coeff = 1.0
+        else:
+            # Non-linear solve is required, but there is only one optimum in
+            # [0, 1]
+            # Initial guess is based on solution when b >> a
 
+            res = minimize_scalar(lambda z: -(1 + z**a)*(1 - z**b),
+                                  bounds=(0, 1),
+                                  method='bounded')
 
-class TempCubic(Model):
-    """Cubic polynomial temperature radial function. This is a two parameter
-    model
+            coeff = -1.0/res.fun
 
-        T(x) = (a - T_w) [3b (x^2 - 1) - 2 (x^3 - 1)]
-               / (b^3 - 3b + 2) + T_w
-
-    where T_w is the wall temperature, a is the maximum temperature, and
-    b < 2/3 is the location of the peak.
-    """
-
-    @property
-    def profile(self):
-        """Indicator the function is a dimensionless radial profile."""
-        return False
-
-    def __call__(self, x: Real[Array, " _"], a: float, b: float
-                 ) -> Real[Array, " _"]:
-        """Evaluates the temperature radial function.
-
-        args:
-            x: Evaluation points in [0, 1] (normalized radius)
-            a: Maximum temperature
-            b: Location of peak, 0 <= b < 2/3
-
-        returns:
-            the evaluated profile
-        """
-
-        if b < 0 or b >= 2/3:
-            raise ValueError("peak location (b) must be in [0, 2/3)")
-
-        out = 3*b*(x**2 - 1) - 2*(x**3 - 1)
-        out /= b**3 - 3*b + 2
-        out *= a - TEMP_W
-
-        out += TEMP_W
-
-        return out
+        return coeff*(1 + x**a)*(1 - x**b)

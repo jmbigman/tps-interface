@@ -1,4 +1,4 @@
-"""Analyzes 2-D plasma data."""
+"""Analyzes 2-D LTE plasma data."""
 
 from argparse import ArgumentParser, BooleanOptionalAction
 
@@ -9,8 +9,8 @@ import numpy as np
 import pyvista as pv
 
 from tps_interface import TwoDInterface, time_statistics, TORCH_LENGTH, \
-    plot_axial, plot_radial, fit_profile, mean_std, fit_quantity
-from tps_interface.models import Angular, Axial, TempSupEll
+    plot_axial, plot_radial, fit_profile, mean_std, fit_deviation
+from tps_interface.models import Angular, Axial, TempPoly
 
 FOLDER = 'output/plasma'
 
@@ -57,9 +57,8 @@ if __name__ == '__main__':
     if args.pre_process:
         reader = pv.PVDReader(args.filename)
         mesh = time_statistics(reader, args.t1, args.t2,
-                               ['density', 'temperature', 'Yn_Ar', 'Yn_Ar.+1',
-                                'Yn_E', 'Yn_Ar_m', 'Yn_Ar_r', 'Yn_Ar_h',
-                                'Yn_Ar_p', 'axi_m', 'ang_m'], _pre_process)
+                               ['density', 'temperature', 'axi_m', 'ang_m'],
+                               _pre_process)
         mesh.save(args.output)
     else:
         mesh = pv.read(args.filename)
@@ -76,24 +75,27 @@ if __name__ == '__main__':
     # Temperature
     print("Evaluating temperature parameters")
 
-    temp_model = TempSupEll()
+    temp_model = TempPoly()
 
-    (temp_vals,
+    (temp_dev,
      temp_params,
-     temp_rel) = fit_quantity(tdi, "temperature_avg", z, temp_model,
-                              bounds=([0.0, 2.0], [np.inf, 100.0]))
+     temp_rel,
+     temp_max) = fit_deviation(tdi, "temperature_avg", z, temp_model,
+                               bounds=([1.1, 1.1], [np.inf, np.inf]))
 
-    plot_axial(z, temp_params[:, 0], r'T_{max}', 'temp_max', False, FOLDER)
+    plot_axial(z, temp_max, r'T_{max}', 'temp_max', False, FOLDER)
 
-    plot_axial(z, temp_params[:, 1], r'\alpha_T', 'temp_shape', False, FOLDER)
+    plot_axial(z, temp_params[:, 0], 'a', 'temp_1', False, FOLDER)
 
-    plot_radial(z, temp_vals, 'T', join(FOLDER, 'temp'), temp_model,
+    plot_axial(z, temp_params[:, 1], 'b', 'temp_2', False, FOLDER)
+
+    plot_radial(z, temp_dev, r'\delta_T', join(FOLDER, 'temp'), temp_model,
                 temp_params, False)
 
-    print("Maximum temperature")
+    print("Temperature shape parameter 1")
     _ = mean_std(z, temp_params[:, 0])
 
-    print("Temperature shape parameter")
+    print("Temperature shape parameter 2")
     _ = mean_std(z, temp_params[:, 1])
 
     # Angular momentum

@@ -85,8 +85,6 @@ def plot_axial(z: Real[Array, " _"], f: Real[Array, " _"], var: str,
 
     plt.figure(figsize=(5, 3))
 
-    plt.plot(100*z, f)
-
     if cs:
         ylbl = r'$\left \langle ' + var + r'\right \rangle$'
     else:
@@ -97,14 +95,20 @@ def plot_axial(z: Real[Array, " _"], f: Real[Array, " _"], var: str,
 
     plt.grid()
 
-    bottom, top = plt.ylim()
+    # Automatically use log-spaced y if the data span many orders of magnitude
+    if (np.max(f) - np.min(f))/np.mean(f) > 100:
+        plt.semilogy(100*z, f)
+    else:
+        plt.plot(100*z, f)
 
-    if bottom > 0:
-        plt.ylim(0.0, top)
+        bottom, top = plt.ylim()
 
-    plt.gca().xaxis.set_minor_locator(AutoMinorLocator(5))
-    plt.gca().yaxis.set_minor_locator(AutoMinorLocator(5))
-    plt.grid(which='minor', linestyle='-', alpha=0.3)
+        if bottom > 0:
+            plt.ylim(0.0, top)
+
+        plt.gca().xaxis.set_minor_locator(AutoMinorLocator(5))
+        plt.gca().yaxis.set_minor_locator(AutoMinorLocator(5))
+        plt.grid(which='minor', linestyle='-', alpha=0.3)
 
     plt.tight_layout()
 

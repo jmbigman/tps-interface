@@ -666,6 +666,62 @@ def fit_profile(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
     return profs, np.array(params_list), np.array(rel_err_list), integrals
 
 
+def fit_deviation(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
+                  model: Model, **kwargs) -> tuple[Real[Array, " _"],
+                                                   Real[Array, " _"],
+                                                   Real[Array, " _"]]:
+    """Samples the deviation of the quantity radially from its wall value and
+    curve fits the normalized parameterized model at the axial positions.
+
+    args:
+        tdi: Interface to 2-D dataset
+        field: Field name (to fit against)
+        z: Axial positions [m]
+        model: Model to curve fit
+        **kwargs: Passed through to SciPy `curve_fit`
+
+    returns:
+        the radially sampled deviation,
+        the optimal parameters at the axial positions,
+        the relative errors,
+        the maximum sampled values
+    """
+
+    if model.profile:
+        raise ValueError("model must be a radial quantity")
+
+    values = tdi.radial_sample(field, z)
+
+    wall_val = values[:, -1]
+    max_val = np.max(values, 1)
+
+    # Rescale
+    values -= wall_val[:, np.newaxis]
+    values /= max_val[:, np.newaxis]
+
+    r_norm = tdi.r_norm
+
+    params_list = []
+    rel_err_list = []
+
+    for val in values:
+
+        # Error norm should be weighted by the radius for cross-sectional
+        # integral comparison
+        # `curve_fit` takes reciprocal of weights like classical WLS
+        with np.errstate(divide='ignore'):
+            weights = 1.0/r_norm
+
+        cf_result = curve_fit(model, r_norm, val, sigma=weights, **kwargs)
+
+        model_eval = model(r_norm, *cf_result[0])
+
+        params_list.append(cf_result[0])
+        rel_err_list.append(relative_error(r_norm, val, model_eval))
+
+    return values, np.array(params_list), np.array(rel_err_list), max_val
+
+
 def fit_quantity(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
                  model: Model, **kwargs) -> tuple[Real[Array, " _"],
                                                   Real[Array, " _"],
@@ -682,7 +738,7 @@ def fit_quantity(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
 
     returns:
         the radially sampled quantity,
-        the optimal parameters at the axial positions
+        the optimal parameters at the axial positions,
         the relative errors
     """
 
