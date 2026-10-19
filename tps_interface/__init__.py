@@ -15,6 +15,7 @@ from .plotting import plot_radial
 from .plotting import plot_relative_error
 
 from ._utils import mean_std
+from ._utils import create_analysis_parser
 
 __all__ = [TwoDInterface,
            time_statistics,
@@ -30,4 +31,5 @@ __all__ = [TwoDInterface,
            plot_axial,
            plot_radial,
            plot_relative_error,
-           mean_std]
+           mean_std,
+           create_analysis_parser]

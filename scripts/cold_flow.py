@@ -1,8 +1,7 @@
 """Analyzes 2-D cold flow data."""
 
-from os.path import join
-
-from argparse import ArgumentParser, BooleanOptionalAction
+from os import makedirs
+from os.path import basename, join
 
 import numpy as np
 
@@ -12,8 +11,9 @@ from matplotlib import pyplot as plt
 from matplotlib.ticker import AutoMinorLocator, LogLocator
 
 from tps_interface import TwoDInterface, time_statistics, TORCH_LENGTH, \
-    step_finder, plot_radius, plot_axial, plot_radial, \
-    fit_profile, save_torch_radius, plot_relative_error, mean_std, save_axial
+    step_finder, plot_radius, plot_axial, plot_radial, fit_profile, \
+    save_torch_radius, plot_relative_error, mean_std, save_axial, \
+    create_analysis_parser
 from tps_interface.models import Angular, Axial
 
 FOLDER = 'output/cold_flow'
@@ -70,44 +70,60 @@ def _plot_parameters(z: np.ndarray, ang_params: np.ndarray,
     plt.close()
 
 
-parser = ArgumentParser(description="Analysis of 2-D cold flow data")
-parser.add_argument('-f', type=str, metavar="\b",
-                    dest="filename",
-                    help="Name of file with 2-D TPS data, typically .pvd")
-parser.add_argument('--pre-process', action=BooleanOptionalAction,
-                    metavar="\b", default=True, dest='pre_process',
-                    help="Pre-process the data for time statistics")
-parser.add_argument('-o', metavar="\b", default="momentum_statistics.vtu",
-                    dest='output', help="Output filename for time statistics")
-parser.add_argument('-t1', type=int, metavar="\b", dest="t1", default=0,
-                    help="First time point to include in statistics")
-parser.add_argument('-t2', type=int, metavar="\b", dest="t2", default=-1,
-                    help="Last time point to include in statistics")
+parser = create_analysis_parser("Analysis of 2-D cold flow data",
+                                "momentum_statistics.vtu")
 
 if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    print(f"Input file: {args.filename}")
+
+    print(f"Output directory: {FOLDER}")
+
+    makedirs(FOLDER, exist_ok=True)
+    # ----------------------------------------------------------------------- #
     if args.pre_process:
+
         reader = pv.PVDReader(args.filename)
+
+        last_index = (len(reader.time_values) - 1
+                      if args.t2 is None else args.t2)
+
+        print(f"Computing time statistics for indices {args.t1}"
+              + f" through {last_index}")
+
         mesh = time_statistics(reader, args.t1, args.t2,
                                ['ang_m', 'vel_r', 'vel_z'], _pre_process)
-        mesh.save(args.output)
+
+        statistics_file = join(FOLDER, basename(args.output))
+
+        mesh.save(statistics_file)
+
+        print(f"Saved time statistics to {statistics_file}")
+
     else:
+
+        print(f"Loading existing statistics from {args.filename}")
+
         mesh = pv.read(args.filename)
 
-    tdi = TwoDInterface(mesh)
+    print(f"Loaded mesh: {mesh.n_points} points, {mesh.n_cells} cells")
 
-    print("Saving and plotting torch radius")
+    tdi = TwoDInterface(mesh, n_points=200)
+    # ----------------------------------------------------------------------- #
+    print("Saving and plotting original, no-step, and smoothed torch geometry")
 
-    z, r = save_torch_radius(tdi, '1d_geometry.h5', 2000)
-    plot_radius(z, r, 'original.pdf')
+    z, r = save_torch_radius(tdi, '1d_geometry.h5', 2000, folder=FOLDER)
+    plot_radius(z, r, 'original.pdf', folder=FOLDER)
     z, r = save_torch_radius(tdi, '1d_geometry_no_step.h5', 2000,
-                             0.11, 0.15, mode='no_step')
-    plot_radius(z, r, 'no_step.pdf')
+                             0.11, 0.15, mode='no_step', folder=FOLDER)
+    plot_radius(z, r, 'no_step.pdf', folder=FOLDER)
     z, r = save_torch_radius(tdi, '1d_geometry_smooth.h5', 2000,
-                             2.5e-3, mode='smooth')
-    plot_radius(z, r, 'smooth.pdf')
+                             2.5e-3, mode='smooth', folder=FOLDER)
+    plot_radius(z, r, 'smooth.pdf', folder=FOLDER)
+    # ----------------------------------------------------------------------- #
+    print("Locating the torch geometry step")
 
     z_step = step_finder(tdi, 0.12, 0.13, 1e-12, verbose=True)
 
@@ -119,8 +135,9 @@ if __name__ == '__main__':
     z = np.append(z, np.linspace(z.max(), 0.14, 20))
     z = np.append(z, np.linspace(z.max(), TORCH_LENGTH, 40))
     z = np.unique(z)
-
+    # ----------------------------------------------------------------------- #
     # Angular momentum
+    # ----------------------------------------------------------------------- #
     print("Evaluating angular momentum cross-sectional integral and"
           + " parameters")
 
@@ -136,10 +153,11 @@ if __name__ == '__main__':
     plot_radial(z, ang_profs, r'r u_\theta', join(FOLDER, 'ang_m'), ang_model,
                 ang_params)
 
-    print("Angular parameter")
+    print("Angular fit parameter statistics")
     _ = mean_std(z, ang_params)
-
+    # ----------------------------------------------------------------------- #
     # Axial momentum
+    # ----------------------------------------------------------------------- #
     print("Evaluating axial momentum cross-sectional integral and parameters")
 
     axi_model = Axial()
@@ -154,27 +172,32 @@ if __name__ == '__main__':
     plot_radial(z, axi_profs, 'u_z', join(FOLDER, 'axi_m'), axi_model,
                 axi_params)
 
-    print("Axial parameter b")
+    print("Axial exponential parameter statistics")
     _ = mean_std(z, axi_params[:, 0])
 
-    print("Axial parameter log(c)")
+    print("Logarithm of axial shift parameter statistics")
     _ = mean_std(z, np.log(axi_params[:, 1]))
 
     # Axial development of parameters and relative error
+    print("Plotting fitted parameters and relative errors")
     _plot_parameters(z, ang_params, axi_params)
 
     plot_relative_error(z, np.vstack((ang_rel, axi_rel)),
                         [r'$f_\theta$', '$f_z$'],
                         'momentum_error.pdf', FOLDER)
 
+    # ----------------------------------------------------------------------- #
     # Radial momentum
-    rad_profs, rad_cs = tdi.radial_profile('vel_r_avg', z)
+    # ----------------------------------------------------------------------- #
+    print("Computing radial velocity cross-sectional integrals")
+    rad_cs = tdi.cs_integral('vel_r_avg', z)
 
     plot_axial(z, rad_cs, 'u_r', 'rad_m', folder=FOLDER)
 
-    plot_radial(z, rad_profs, 'u_r', join(FOLDER, 'rad_m'))
-
+    # ----------------------------------------------------------------------- #
     # Save cross-sectional integrals, parameters
+    # ----------------------------------------------------------------------- #
+    print(f"Saving cross-sectional integrals and parameters to {FOLDER}")
     save_axial(z, np.vstack((axi_cs, ang_cs, rad_cs)),
                ['axial momentum', 'angular momentum', 'radial momentum'],
                join(FOLDER, 'momentum.h5'),
@@ -188,3 +211,5 @@ if __name__ == '__main__':
                ['Angular momentum exponential parameter',
                 'Axial momentum exponential parameter',
                 'Axial momentum shift parameter'])
+
+    print(f"Analysis complete. Results saved in {FOLDER}/")

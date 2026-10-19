@@ -1,7 +1,5 @@
 """Analyzes 2-D LTE plasma data."""
 
-from argparse import ArgumentParser, BooleanOptionalAction
-
 from os.path import join
 
 import numpy as np
@@ -9,7 +7,8 @@ import numpy as np
 import pyvista as pv
 
 from tps_interface import TwoDInterface, time_statistics, TORCH_LENGTH, \
-    plot_axial, plot_radial, fit_profile, mean_std, fit_deviation
+    plot_axial, plot_radial, fit_profile, mean_std, fit_deviation, \
+    create_analysis_parser
 from tps_interface.models import Angular, Axial, TempPoly
 
 FOLDER = 'output/plasma'
@@ -36,19 +35,8 @@ def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
     return mesh
 
 
-parser = ArgumentParser(description="Analysis of 2-D plasma data")
-parser.add_argument('-f', type=str, metavar="\b",
-                    dest="filename",
-                    help="Name of file with 2-D TPS data, typically .pvd")
-parser.add_argument('--pre-process', action=BooleanOptionalAction,
-                    metavar="\b", default=True, dest='pre_process',
-                    help="Pre-process the data for time statistics")
-parser.add_argument('-o', metavar="\b", default="plasma_statistics.vtu",
-                    dest='output', help="Output filename for time statistics")
-parser.add_argument('-t1', type=int, metavar="\b", dest="t1", default=0,
-                    help="First time point (integer) to include in statistics")
-parser.add_argument('-t2', type=int, metavar="\b", dest="t2", default=-1,
-                    help="Last time point (integer) to include in statistics")
+parser = create_analysis_parser("Analysis of 2-D plasma data",
+                                "plasma_statistics.vtu")
 
 if __name__ == '__main__':
 
