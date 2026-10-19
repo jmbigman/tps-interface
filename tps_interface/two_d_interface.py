@@ -81,20 +81,28 @@ class TwoDInterface:
         rtol: Relative tolerance convergence criterion for torch radius
         n_points: Number of points to use in radial sampling of fields,
                   optional. Default is 100.
+        norm_rtol: Non-negative cancellation tolerance for profile
+                   normalization, relative to the integral of the absolute
+                   field. Default is 1e-12.
     """
 
     # Cache torch radii
-    _radius_cache: dict[float, float] = {}
+    _radius_cache: dict[float, float]
 
     n_points: int
 
     _r_norm: Real[Array, "n_points"]
 
     def __init__(self, mesh: pv.UnstructuredGrid = None, rtol: float = 1e-7,
-                 n_points: int = N_POINTS):
+                 n_points: int = N_POINTS, norm_rtol: float = 1e-12):
+
+        if not np.isfinite(norm_rtol) or norm_rtol < 0:
+            raise ValueError("norm_rtol must be finite and nonnegative")
 
         self._mesh = mesh
         self._rtol = rtol
+        self._norm_rtol = norm_rtol
+        self._radius_cache = {}
 
         if rtol < 1e-7:
             print('rtol of 1e-7 generally works well. Smaller tolerances do '
@@ -137,6 +145,7 @@ class TwoDInterface:
             mesh: The new 2-D data
         """
         self._mesh = mesh
+        self.clear_radius_cache()
 
     def clear_radius_cache(self) -> None:
         """Resets the torch radius cache."""
@@ -157,6 +166,13 @@ class TwoDInterface:
         if field not in self.field_names:
             msg = "Specified field is not in the dataset"
             raise RuntimeError(msg)
+
+        field_data = self._mesh.point_data[field]
+
+        if field_data.ndim != 1:
+            raise NotImplementedError("Only scalar fields are currently"
+                                      + f" supported; field {field} has shape"
+                                      + f" {field_data.shape}.")
 
     def torch_radius(self, z: Real[Array, "..."]) -> Real[Array, "..."]:
         """Finds the torch radius at one axial position by bisection. Returns
@@ -235,7 +251,14 @@ class TwoDInterface:
 
         probe = pv.PolyData(point)
 
-        field_value = probe.sample(mesh).point_data[field][0]
+        sampled = probe.sample(mesh)
+        valid = np.asarray(sampled.point_data['vtkValidPointMask'])
+
+        if not np.all(valid == 1):
+            raise RuntimeError(f"Sampling field {field} failed at"
+                               + f" (r, z) = ({r}, {z})")
+
+        field_value = sampled.point_data[field][0]
 
         return field_value
 
@@ -288,7 +311,16 @@ class TwoDInterface:
                           np.array([torch_r, z, 0.0]),
                           self.r_norm)
 
-        field_values = line.sample(mesh).point_data[field]
+        sampled = line.sample(mesh)
+        valid = np.asarray(sampled.point_data['vtkValidPointMask'])
+
+        if not np.all(valid == 1):
+            invalid_r = (torch_r*self.r_norm)[valid != 1]
+
+            raise RuntimeError(f"Sampling field {field} failed at"
+                               + f" (r, z) = ({invalid_r}, {z})")
+
+        field_values = sampled.point_data[field]
 
         return np.asarray(field_values)
 
@@ -311,8 +343,13 @@ class TwoDInterface:
             z: Axial position
 
         returns:
-            The profile values,
+            the profile values,
             the cross-sectional integral
+
+        raises:
+            ValueError: The integral is nonfinite, zero, or too small relative
+                        to the integral of the absolute field, as controlled
+                        by norm_rtol.
         """
 
         field_values = self.radial_sample(field, z)
@@ -325,22 +362,39 @@ class TwoDInterface:
         # Integrate and normalize
         integral = 2*np.pi*np.trapezoid(r_pts*field_values, r_pts)
 
+        abs_integral = 2*np.pi*np.trapezoid(r_pts*np.abs(field_values), r_pts)
+
+        if ((not np.isfinite(integral)
+             or not np.isfinite(abs_integral)
+             or abs_integral == 0
+             or abs(integral) <= self._norm_rtol*abs_integral)):
+
+            raise ValueError("Normalized profile is undefined or"
+                             + f" ill-conditioned for field {field}"
+                             + f" at z={z}: integral={integral},"
+                             + f" absolute-field integral={abs_integral},"
+                             + f" norm_rtol={self._norm_rtol}")
+
         prof = np.pi*torch_r**2*field_values/integral
 
         return prof, integral
 
     def cs_integral(self, field: str, z: float) -> float:
         """Evaluates the cross-sectional integral of a field at the given axial
-        position. See `radial_profile` for details.
+        position.
 
         args:
             field: Field name
             z: Axial position
 
         returns:
-            The radial integral
+            the radial integral
         """
-        return self.radial_profile(field, z)[1]
+
+        field_values = self.radial_sample(field, z)
+        r_pts = self.torch_radius(z)*self.r_norm
+
+        return 2*np.pi*np.trapezoid(r_pts*field_values, r_pts)
 
 
 # --------------------------------------------------------------------------- #
@@ -351,17 +405,19 @@ class TwoDInterface:
 UnstructuredGridOperator = Callable[[pv.UnstructuredGrid], pv.UnstructuredGrid]
 
 
-def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
+def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int | None = None,
                     field_names: list[str] = None,
                     operator: UnstructuredGridOperator = lambda x: x) \
                         -> pv.UnstructuredGrid:
     """Calculates the average and standard deviation of fields in a .pvd
-    dataset inside the given time range.
+    dataset inside the given time range. At least two time points with finite,
+    strictly increasing timestamps are required.
 
     args:
         reader: .pvd file reader
-        t1: Index of first time points, optional. Default is 0.
-        t2: Index of last time point, optional. Default is -1.
+        t1: Inclusive index of first time point, optional. Default is 0.
+        t2: Inclusive index of last time point, optional. Default is None,
+            meaning the last available time point.
         field_names: List of field names to use, optional. Default is all.
         operator: Operator to apply at each time point before calculating the
                   statistics, optional. Default is identity.
@@ -371,8 +427,31 @@ def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
         appended with '_avg' or '_std'
     """
 
-    if t2 == -1:
-        t2 = len(reader.time_values) - 1
+    if isinstance(t1, bool) or not isinstance(t1, (int, np.integer)):
+        raise TypeError("t1 must be an integer index")
+
+    if t2 is not None and (isinstance(t2, bool)
+                           or not isinstance(t2, (int, np.integer))):
+        raise TypeError("t2 must be an integer index or None")
+
+    time_values = np.asarray(reader.time_values)
+    n_times = len(time_values)
+
+    if t2 is None:
+        t2 = n_times - 1
+
+    if not (0 <= t1 < t2 < n_times):
+        raise ValueError("Time statistics require at least two time points"
+                         + f" with 0 <= t1 < t2 < {n_times};"
+                         + f" got t1={t1}, t2={t2}")
+
+    t_pts = time_values[t1:t2+1]
+
+    if not np.all(np.isfinite(t_pts)) or not np.all(np.diff(t_pts) > 0):
+        raise ValueError("Selected timestamps must be finite and strictly "
+                         "increasing")
+
+    t_int = t_pts[-1] - t_pts[0]
 
     # ----------------------------------------------------------------------- #
     # First time point
@@ -382,11 +461,17 @@ def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
 
     mesh = operator(reader.read()[0])
 
+    # Copy the reference geometry so subsequent reads cannot modify it
+    reference_points = mesh.points.copy()
+    reference_cells = mesh.cells.copy()
+    reference_celltypes = mesh.celltypes.copy()
+
     if field_names is None:
         field_names = mesh.point_data.keys()
 
     # Initialize empty
-    out = pv.UnstructuredGrid(mesh.cells, mesh.celltypes, mesh.points)
+    out = pv.UnstructuredGrid(reference_cells, reference_celltypes,
+                              reference_points)
 
     data = {}
 
@@ -404,6 +489,15 @@ def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
 
         mesh = operator(reader.read()[0])
 
+        same_mesh = (np.array_equal(mesh.points, reference_points)
+                     and np.array_equal(mesh.cells, reference_cells)
+                     and np.array_equal(mesh.celltypes, reference_celltypes))
+
+        if not same_mesh:
+            raise ValueError(f"Mesh changed at time-point index {t} relative"
+                             + f" to first index {t1}. Time statistics require"
+                             + " a fixed mesh.")
+
         for fn in field_names:
 
             data[fn].append(mesh.point_data[fn])
@@ -411,9 +505,6 @@ def time_statistics(reader: pv.PVDReader, t1: int = 0, t2: int = -1,
     # ----------------------------------------------------------------------- #
     # Calculate statistics
     # ----------------------------------------------------------------------- #
-
-    t_pts = np.array(reader.time_values[t1:t2+1])
-    t_int = t_pts[-1] - t_pts[0]
 
     for fn in field_names:
 
@@ -493,10 +584,11 @@ def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
     args:
         tdi: Interface to 2-D dataset
         filename: Name of HDF5 file
-        n_points: Number of axial points
+        n_points: Number of axial points, at least 3
         *options: Additional argument(s) for post-processing mode.
         folder: Output directory, optional. Default is 'output'.
-        z_max: Maximum axial position
+        z_max: Maximum axial position, greater than `tdi.z_min` and no greater
+               than the mesh's maximum axial position
         mode: Post-processing mode, optional. `None` saves the torch radius as
               is. 'no_step' ignores the step region and requires the left and
               right boundaries, exclusive, of the step region to be passed as a
@@ -511,10 +603,43 @@ def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
         the torch radius [m]
     """
 
-    if not exists(folder):
-        makedirs(folder)
+    if (isinstance(n_points, bool)
+            or not isinstance(n_points, (int, np.integer))):
 
-    z = np.linspace(tdi.z_min, z_max, n_points)
+        raise TypeError("n_points must be an integer")
+
+    if n_points < 3:
+        raise ValueError("n_points must be at least 3")
+
+    z_min = tdi.z_min
+    mesh_z_max = tdi.mesh.bounds[3]
+
+    if not np.isfinite(z_max) or not (z_min < z_max <= mesh_z_max):
+        raise ValueError(f"z_max must be finite and satisfy {z_min} < z_max <="
+                         + f"{mesh_z_max}; got {z_max}")
+
+    z = np.linspace(z_min, z_max, n_points)
+
+    if mode == 'no_step':
+
+        if len(options) != 2:
+            raise ValueError("options must have 2 elements for \'no_step\'")
+
+        z_l, z_r = options
+
+        if not isinstance(z_l, float) or not isinstance(z_r, float):
+            raise TypeError("options must be floats for \'no_step\'")
+
+        if not np.isfinite(z_l) or not np.isfinite(z_r) or z_l >= z_r:
+            raise ValueError("'no_step' boundaries must be finite with"
+                             + " z_l < z_r")
+
+        inside_step = (z > z_l) & (z < z_r)
+
+        if np.count_nonzero(inside_step) == 0:
+            raise ValueError("No axial samples lie inside the 'no_step'"
+                             + " interval.")
+
     r = tdi.torch_radius(z)
 
     if mode is None:
@@ -526,18 +651,8 @@ def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
 
     elif mode == 'no_step':
 
-        if len(options) != 2:
-            raise ValueError("options must have 2 elements for \'no_step\'")
-
-        z_l, z_r = options
-
-        if not isinstance(z_l, float) or not isinstance(z_r, float):
-            raise TypeError("options must be floats for \'no_step\'")
-
-        mask = (z_l < z)*(z < z_r)
-
         # Use straight line over the region
-        r[mask] = r[mask][0]
+        r[inside_step] = r[inside_step][0]
 
         r_d = np.gradient(r, z, edge_order=2)
 
@@ -561,11 +676,12 @@ def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
         dz = z[1] - z[0]
 
         # Convert from FWHM in physical units to standard deviation in data
-        # units and round up for an integer
-        sig_d = np.ceil(fwhm/(2*np.sqrt(2*np.log(2))*dz))
+        # units
+        sig_d = fwhm/(2*np.sqrt(2*np.log(2))*dz)
 
-        r = gaussian_filter1d(r, sig_d, mode='nearest', truncate=3)
+        r_sm = gaussian_filter1d(r, sig_d, mode='nearest', truncate=3)
 
+        # Differentiate the original radius at the same smoothing width.
         r_d = gaussian_filter1d(r, sig_d, order=1, mode='nearest', truncate=3)
         r_d /= dz
 
@@ -576,17 +692,21 @@ def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
         raise KeyError('Post-processing mode must be None, \'no-step\', or '
                        + '\'smooth\'')
 
+    r_out = r_sm if mode == 'smooth' else r
+    if not exists(folder):
+        makedirs(folder)
+
     filename = join(folder, filename)
 
     with h5py.File(filename, 'w') as f:
         f.create_dataset('axial position', data=z)
-        f.create_dataset('torch radius', data=r)
+        f.create_dataset('torch radius', data=r_out)
         f.create_dataset('torch radius derivative', data=r_d)
         f.attrs['units'] = 'm'
 
         f.attrs.update(extra_attrs)
 
-    return z, r
+    return z, r_out
 
 
 # --------------------------------------------------------------------------- #
@@ -650,9 +770,10 @@ def fit_profile(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
 
         # Error norm should be weighted by the radius for cross-sectional
         # integral comparison
-        # `curve_fit` takes reciprocal of weights like classical WLS
+        # `curve_fit` squares residuals divided by sigma, so use 1/sqrt(r)
+        # to weight squared residuals by r. Infinite sigma excludes the axis.
         with np.errstate(divide='ignore'):
-            weights = 1.0/r_norm
+            weights = 1.0/np.sqrt(r_norm)
 
         cf_result = curve_fit(model, r_norm, prof, sigma=weights,
                               method='dogbox', ftol=1e-12, xtol=1e-12,
@@ -708,9 +829,10 @@ def fit_deviation(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
 
         # Error norm should be weighted by the radius for cross-sectional
         # integral comparison
-        # `curve_fit` takes reciprocal of weights like classical WLS
+        # `curve_fit` squares residuals divided by sigma, so use 1/sqrt(r)
+        # to weight squared residuals by r. Infinite sigma excludes the axis.
         with np.errstate(divide='ignore'):
-            weights = 1.0/r_norm
+            weights = 1.0/np.sqrt(r_norm)
 
         cf_result = curve_fit(model, r_norm, val, sigma=weights, **kwargs)
 
@@ -756,9 +878,10 @@ def fit_quantity(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
 
         # Error norm should be weighted by the radius for cross-sectional
         # integral comparison
-        # `curve_fit` takes reciprocal of weights like classical WLS
+        # `curve_fit` squares residuals divided by sigma, so use 1/sqrt(r)
+        # to weight squared residuals by r. Infinite sigma excludes the axis.
         with np.errstate(divide='ignore'):
-            weights = 1.0/r_norm
+            weights = 1.0/np.sqrt(r_norm)
 
         cf_result = curve_fit(model, r_norm, val, sigma=weights, **kwargs)
 
@@ -805,6 +928,12 @@ def save_axial(z: Real[Array, " _"], quantities: Real[Array, " _ _"],
     # Replace None with list of None
     descs = [None]*n_qty if descs is None else descs
     units = [None]*n_qty if units is None else units
+
+    for label, metadata in (('names', names), ('descs', descs),
+                            ('units', units)):
+        if len(metadata) != n_qty:
+            raise ValueError(f"{label} must have {n_qty} entries, "
+                             f"got {len(metadata)}")
 
     with h5py.File(fname, 'w') as f:
         z_pos = f.create_dataset('axial position', data=z)
