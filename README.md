@@ -1,4 +1,8 @@
 # TPS-radial-profiles
+
+[![Style Check](https://github.com/jmbigman/tps-interface/actions/workflows/style-check.yml/badge.svg)](https://github.com/jmbigman/tps-interface/actions/workflows/style-check.yml)
+[![Regression Tests](https://github.com/jmbigman/tps-interface/actions/workflows/regression-tests.yml/badge.svg)](https://github.com/jmbigman/tps-interface/actions/workflows/regression-tests.yml)
+
 Reads and analyzes 2- and 3-D `Torch Plasma Simulator` (`TPS`) simulation results for 1-D modeling.
 `TPS` can be found here: [https://github.com/pecos/tps](https://github.com/pecos/tps).
 
@@ -12,18 +16,22 @@ pip3 install -e .
 ```
 
 ## Modules
-`two_d_interface`: Evaluates quantities needed for 1-D modeling from 2-D `TPS` simulation results
+`two_d_interface`: Evaluates quantities needed for quasi-1-D modeling from 2-D `TPS` simulation results
 
 `plotting`: Plots the torch radius, cross-sectionally integrated quantities, radial profiles, etc.
 
-`model_profiles`: Samples radial profiles from `TPS` data and fits parameters in model profiles
+`models`: Samples radial profiles from `TPS` data and fits parameters in model profiles
 
 ## Scripts
 `cold_flow.py`: Analyzes time-dependent 2-D cold flow data
 `plasma.py`: Analyzes time-dependent 2-D plasma data
 
 ## Development
-To lint the code, run:
+To run the test suite,
 ```
-flake8 tps_interface scripts
+make check
+```
+To lint the code,
+```
+make lint
 ```

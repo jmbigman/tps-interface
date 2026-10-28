@@ -738,8 +738,10 @@ def relative_error(r_norm: Real[Array, " _"], data: Real[Array, " _"],
 
 
 def fit_profile(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
-                model: Model) -> tuple[Real[Array, " _"], Real[Array, " _"],
-                                       Real[Array, " _"], Real[Array, " _"]]:
+                model: Model, **kwargs) -> tuple[Real[Array, " _"],
+                                                 Real[Array, " _"],
+                                                 Real[Array, " _"],
+                                                 Real[Array, " _"]]:
     """Samples the dimensionless radial profiles and curve fits the
     parameterized model at the axial positions.
 
@@ -748,6 +750,8 @@ def fit_profile(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
         field: Field name (to fit against)
         z: Axial positions [m]
         model: Model to curve fit
+        **kwargs: Passed through to SciPy `curve_fit`, overriding default
+                  optimizer settings when supplied (e.g. p0 and bounds).
 
     returns:
         the radial profiles,
@@ -766,6 +770,9 @@ def fit_profile(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
     params_list = []
     rel_err_list = []
 
+    fit_options = dict(method='dogbox', ftol=1e-12, xtol=1e-12, gtol=1e-12)
+    fit_options.update(kwargs)
+
     for prof in profs:
 
         # Error norm should be weighted by the radius for cross-sectional
@@ -776,8 +783,7 @@ def fit_profile(tdi: TwoDInterface, field: str, z: Real[Array, " _"],
             weights = 1.0/np.sqrt(r_norm)
 
         cf_result = curve_fit(model, r_norm, prof, sigma=weights,
-                              method='dogbox', ftol=1e-12, xtol=1e-12,
-                              gtol=1e-12)
+                              **fit_options)
 
         model_eval = model(r_norm, *cf_result[0])
 

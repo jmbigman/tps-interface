@@ -110,6 +110,42 @@ class Angular(Model):
         return coeff*model_eval
 
 
+class CounterFlow(Model):
+    """This is a two parameter radial profile for the axial momentum
+
+        f_z(s; n, a) = ((n + 2) / n) * (1 - s^n)
+                       * (1 - a * ((n+2)/(2(n+4)) - s^2)),
+
+    where n > 1 and a is unbounded. This is a power law and polynomial
+    modification of the fully-developed profile, which it recovers for n = 2,
+    a = 0. The polynomial portion is of minimal non-trivial degree (quadratic).
+    """
+
+    @property
+    def profile(self) -> bool:
+        """Indicator the function is a dimensionless radial profile."""
+        return True
+
+    def __call__(self, x: Real[Array, " _"], n: float, a: float
+                 ) -> Real[Array, " _"]:
+        """Evaluates the axial momentum radial profile.
+
+        args:
+            x: Evaluation points in [0, 1] (normalized radius)
+            n: Power law exponent
+            a: Polynomial parameter
+
+        returns:
+            the evaluated profile
+        """
+
+        out = (n+2)/n
+        out *= (1 - x**n)
+        out *= 1 - a*((n+2)/(2*(n+4)) - x**2)
+
+        return out
+
+
 class Axial(Model):
     """The parameterized dimensionless radial profile for the axial momentum.
     This is a two parameter model

@@ -14,6 +14,7 @@ dependencies = [
     "matplotlib",
     "h5py",
     "flake8",
+    "pytest",
     "jaxtyping"
 ]
 

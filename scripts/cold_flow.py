@@ -8,13 +8,13 @@ import numpy as np
 import pyvista as pv
 
 from matplotlib import pyplot as plt
-from matplotlib.ticker import AutoMinorLocator, LogLocator
+from matplotlib.ticker import AutoMinorLocator
 
 from tps_interface import TwoDInterface, time_statistics, TORCH_LENGTH, \
     step_finder, plot_radius, plot_axial, plot_radial, fit_profile, \
     save_torch_radius, plot_relative_error, mean_std, save_axial, \
     create_analysis_parser
-from tps_interface.models import Angular, Axial
+from tps_interface.models import Angular, CounterFlow
 
 FOLDER = 'output/cold_flow'
 
@@ -30,7 +30,7 @@ def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
         the updated data
     """
 
-    mesh.point_data['ang_m'] = -mesh.points[:, 0]*mesh.point_data['swirl']
+    mesh.point_data['ang_sm'] = -mesh.points[:, 0]*mesh.point_data['swirl']
 
     mesh.point_data['vel_r'] = mesh.point_data['velocity'][:, 0]
     mesh.point_data['vel_z'] = mesh.point_data['velocity'][:, 1]
@@ -50,9 +50,9 @@ def _plot_parameters(z: np.ndarray, ang_params: np.ndarray,
 
     plt.figure(figsize=(5, 3))
 
-    plt.semilogy(100*z, ang_params, label='$a$')
-    plt.semilogy(100*z, ax_params[:, 0], label='$b$')
-    plt.semilogy(100*z, ax_params[:, 1], label='$c$')
+    plt.plot(100*z, ang_params, label=r'$a_\theta$')
+    plt.plot(100*z, ax_params[:, 0], label='$n$')
+    plt.plot(100*z, ax_params[:, 1], label='$a$')
 
     plt.xlabel(r'$z \,[\mathrm{cm}]$')
 
@@ -61,7 +61,6 @@ def _plot_parameters(z: np.ndarray, ang_params: np.ndarray,
     plt.grid()
 
     plt.gca().xaxis.set_minor_locator(AutoMinorLocator(5))
-    plt.gca().yaxis.set_minor_locator(LogLocator(base=10, subs='auto'))
     plt.grid(which='minor', linestyle='-', alpha=0.3)
 
     plt.tight_layout()
@@ -71,7 +70,7 @@ def _plot_parameters(z: np.ndarray, ang_params: np.ndarray,
 
 
 parser = create_analysis_parser("Analysis of 2-D cold flow data",
-                                "momentum_statistics.vtu")
+                                "statistics.vtu")
 
 if __name__ == '__main__':
 
@@ -94,7 +93,7 @@ if __name__ == '__main__':
               + f" through {last_index}")
 
         mesh = time_statistics(reader, args.t1, args.t2,
-                               ['ang_m', 'vel_r', 'vel_z'], _pre_process)
+                               ['ang_sm', 'vel_r', 'vel_z'], _pre_process)
 
         statistics_file = join(FOLDER, basename(args.output))
 
@@ -138,7 +137,7 @@ if __name__ == '__main__':
     # ----------------------------------------------------------------------- #
     # Angular momentum
     # ----------------------------------------------------------------------- #
-    print("Evaluating angular momentum cross-sectional integral and"
+    print("Evaluating specific angular momentum cross-sectional integral and"
           + " parameters")
 
     ang_model = Angular()
@@ -146,37 +145,40 @@ if __name__ == '__main__':
     (ang_profs,
      ang_params,
      ang_rel,
-     ang_cs) = fit_profile(tdi, 'ang_m_avg', z, ang_model)
+     ang_cs) = fit_profile(tdi, 'ang_sm_avg', z, ang_model)
 
-    plot_axial(z, ang_cs, r'r u_\theta', 'ang_m.pdf', folder=FOLDER)
+    plot_axial(z, ang_cs, r'r u_\theta', 'ang_sm.pdf', folder=FOLDER)
 
-    plot_radial(z, ang_profs, r'r u_\theta', join(FOLDER, 'ang_m'), ang_model,
+    plot_radial(z, ang_profs, r'\theta', join(FOLDER, 'ang_sm'), ang_model,
                 ang_params)
 
     print("Angular fit parameter statistics")
     _ = mean_std(z, ang_params)
     # ----------------------------------------------------------------------- #
-    # Axial momentum
+    # Axial velocity
     # ----------------------------------------------------------------------- #
-    print("Evaluating axial momentum cross-sectional integral and parameters")
+    print("Evaluating axial velocity cross-sectional integral and parameters")
 
-    axi_model = Axial()
+    axi_model = CounterFlow()
 
     (axi_profs,
      axi_params,
      axi_rel,
-     axi_cs) = fit_profile(tdi, 'vel_z_avg', z, axi_model)
+     axi_cs) = fit_profile(tdi, 'vel_z_avg', z, axi_model,
+                           p0=(2.0, 0.0),
+                           bounds=((1.0 + 1e-8, -np.inf),
+                                   (np.inf, np.inf)))
 
-    plot_axial(z, axi_cs, 'u_z', 'axi_m.pdf', folder=FOLDER)
+    plot_axial(z, axi_cs, 'u_z', 'axi_vel.pdf', folder=FOLDER)
 
-    plot_radial(z, axi_profs, 'u_z', join(FOLDER, 'axi_m'), axi_model,
+    plot_radial(z, axi_profs, 'z', join(FOLDER, 'axi_vel'), axi_model,
                 axi_params)
 
-    print("Axial exponential parameter statistics")
+    print("Axial exponent statistics")
     _ = mean_std(z, axi_params[:, 0])
 
-    print("Logarithm of axial shift parameter statistics")
-    _ = mean_std(z, np.log(axi_params[:, 1]))
+    print("Axial polynomial parameter statistics")
+    _ = mean_std(z, axi_params[:, 1])
 
     # Axial development of parameters and relative error
     print("Plotting fitted parameters and relative errors")
@@ -199,17 +201,18 @@ if __name__ == '__main__':
     # ----------------------------------------------------------------------- #
     print(f"Saving cross-sectional integrals and parameters to {FOLDER}")
     save_axial(z, np.vstack((axi_cs, ang_cs, rad_cs)),
-               ['axial momentum', 'angular momentum', 'radial momentum'],
+               ['axial velocity', 'specific angular momentum',
+                'radial velocity'],
                join(FOLDER, 'momentum.h5'),
                units=['m^3/s', 'm^4/s', 'm^3/s'])
 
     save_axial(z, np.hstack((ang_params, axi_params)).T,
                ['angular exponential',
-                'axial exponential',
-                'axial shift'],
+                'axial exponent',
+                'axial polynomial'],
                join(FOLDER, 'parameters.h5'),
-               ['Angular momentum exponential parameter',
-                'Axial momentum exponential parameter',
-                'Axial momentum shift parameter'])
+               ['Specific angular momentum exponential parameter',
+                'Axial velocity power law exponent n',
+                'Axial velocity polynomial parameter a'])
 
     print(f"Analysis complete. Results saved in {FOLDER}/")
