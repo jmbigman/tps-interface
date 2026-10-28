@@ -3,15 +3,36 @@
 from typing import Any
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import numpy as np
 
-from scipy.optimize import minimize_scalar
 from scipy.special import erfi
 
 from jaxtyping import Real
 
 Array = np.ndarray
+
+
+@dataclass(frozen=True)
+class Parameter:
+    """Describes a model parameter and its default fitting settings.
+
+    args:
+        name: Parameter name
+        description: Description for metadata and statistics
+        label: Plot legend label, optionally containing LaTeX
+        initial: Initial fitting value, optional. Default is 1.0.
+        lower: Inclusive lower fitting bound, optional. Default is -np.inf.
+        upper: Inclusive upper fitting bound, optional. Default is np.inf.
+    """
+
+    name: str
+    description: str
+    label: str
+    initial: float = 1.0
+    lower: float = -np.inf
+    upper: float = np.inf
 
 
 class Model(ABC):
@@ -22,6 +43,16 @@ class Model(ABC):
 
     or the actual quantity q(r, z).
     """
+
+    @property
+    @abstractmethod
+    def parameters(self) -> tuple[Parameter, ...]:
+        """Describes parameters in the order accepted by __call__.
+
+        returns:
+            The ordered parameter specifications, excluding x.
+        """
+        pass
 
     @property
     @abstractmethod
@@ -58,6 +89,23 @@ class Angular(Model):
 
     where the normalization coefficient, A, has an analytical expression.
     """
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        """Describes the angular exponential parameter.
+
+        returns:
+            The specification for a.
+        """
+
+        prms = []
+
+        prms.append(Parameter(name='exponential',
+                              description='Specific angular momentum'
+                              + ' exponential a',
+                              label=r'$a_\theta$'))
+
+        return tuple(prms)
 
     @property
     def profile(self) -> bool:
@@ -122,6 +170,28 @@ class CounterFlow(Model):
     """
 
     @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        """Describes the axial power law and polynomial parameters.
+
+        returns:
+            The specifications for n and a, with n constrained above one.
+        """
+
+        prms = []
+
+        prms.append(Parameter(name='exponent',
+                              description='Axial velocity power law'
+                              + ' exponent n',
+                              label=r'$n$', initial=2.0, lower=1.0 + 1e-8))
+
+        prms.append(Parameter(name='polynomial',
+                              description='Axial velocity polynomial'
+                              + ' parameter a',
+                              label=r'$a_z$', initial=0.0))
+
+        return tuple(prms)
+
+    @property
     def profile(self) -> bool:
         """Indicator the function is a dimensionless radial profile."""
         return True
@@ -154,6 +224,27 @@ class Axial(Model):
 
     where the normalization coefficient, A, has an analytical expression.
     """
+
+    @property
+    def parameters(self) -> tuple[Parameter, ...]:
+        """Describes the axial exponential and shift parameters.
+
+        returns:
+            The specifications for a and b.
+        """
+
+        prms = []
+
+        prms.append(Parameter(name='exponential',
+                              description='Axial velocity exponential'
+                              + ' parameter a',
+                              label=r'$a_z$'))
+
+        prms.append(Parameter(name='shift',
+                              description='Axial velocity shift parameter b',
+                              label=r'$b_z$'))
+
+        return tuple(prms)
 
     @property
     def profile(self) -> bool:
@@ -202,58 +293,3 @@ class Axial(Model):
             coeff = 1.0/recip_coeff
 
         return coeff*model_eval
-
-
-# --------------------------------------------------------------------------- #
-# Temperature
-#
-# These are deviations of the temperature from the wall temperature along the
-# radial direction
-# --------------------------------------------------------------------------- #
-
-
-class TempPoly(Model):
-    """Polynomial temperature deviation radial function with two parameters
-
-        f(x) = A (1 + x^a) (1 - x^b).
-
-    The normalization coefficient A is determined to ensure max f = 1.
-    """
-
-    @property
-    def profile(self):
-        """Indicator the function is a dimensionless radial profile."""
-        return False
-
-    def __call__(self, x: Real[Array, " _"], a: float, b: float
-                 ) -> Real[Array, " _"]:
-        """Evaluates the temperature deviation model.
-
-        args:
-            x: Evaluation points in [0, 1] (normalized radius)
-            a: First shape parameter, > 1
-            b: Second shape parameter, > 1
-
-        returns:
-            the evaluated profile
-        """
-
-        if a <= 1 or b <= 1:
-            raise ValueError("Shape parameters (a, b) must be greater than 1")
-
-        # Calculate normalization coefficient
-        if a >= b:
-            # Maximum occurs at x = 0 and f(0) = 1
-            coeff = 1.0
-        else:
-            # Non-linear solve is required, but there is only one optimum in
-            # [0, 1]
-            # Initial guess is based on solution when b >> a
-
-            res = minimize_scalar(lambda z: -(1 + z**a)*(1 - z**b),
-                                  bounds=(0, 1),
-                                  method='bounded')
-
-            coeff = -1.0/res.fun
-
-        return coeff*(1 + x**a)*(1 - x**b)

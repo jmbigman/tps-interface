@@ -1,11 +1,14 @@
 """Check the interface against analytical geometry and scalar fields."""
 
+from pathlib import Path
+from unittest.mock import Mock
+
 import numpy as np
 import pyvista as pv
 import pytest
 from numpy.testing import assert_allclose, assert_equal
 
-from tps_interface import TwoDInterface
+from tps_interface import TwoDInterface, save_torch_radius, load_torch_radius
 
 # Include the inlet and outlet; both have strictly positive radii.
 Z = np.array([0.2, 0.35, 0.5, 0.65, 0.8])
@@ -222,3 +225,40 @@ def test_zero_field_has_no_normalized_profile(interface: TwoDInterface):
     assert_allclose(interface.cs_integral('zero', 0.5), 0.0)
     with pytest.raises(ValueError, match='Normalized profile is undefined'):
         interface.radial_profile('zero', 0.5)
+
+
+@pytest.mark.parametrize('overwrite', [False, True])
+def test_radius_file_reuse(interface: TwoDInterface, tmp_path: Path,
+                           monkeypatch: pytest.MonkeyPatch, overwrite: bool):
+    """Checks loading without measurement and saving over an existing file.
+
+    args:
+        interface: Interface fixture for the truncated triangular domain.
+        tmp_path: Temporary output directory supplied by pytest.
+        monkeypatch: Fixture for replacing the radius measurement method.
+        overwrite: Whether the saved radius should be recomputed.
+    """
+
+    folder = str(tmp_path)
+    z, original = save_torch_radius(interface, 'radius.h5', 5,
+                                    folder=folder, z_max=0.8)
+    replacement = np.full(5, 0.6)
+    measure = Mock(return_value=replacement)
+    monkeypatch.setattr(interface, 'torch_radius', measure)
+
+    if overwrite:
+        saved_z, radius = save_torch_radius(interface, 'radius.h5', 5,
+                                            folder=folder, z_max=0.8)
+    else:
+        saved_z, radius = load_torch_radius('radius.h5', folder=folder)
+
+    expected = replacement if overwrite else original
+
+    assert_allclose(saved_z, z)
+    assert_allclose(radius, expected)
+    assert_equal(measure.call_count, int(overwrite))
+
+    # Reopening the file also confirms that an overwrite was persisted.
+    _, reloaded = load_torch_radius('radius.h5', folder=folder)
+    assert_allclose(reloaded, expected)
+    assert_equal(measure.call_count, int(overwrite))

@@ -709,6 +709,22 @@ def save_torch_radius(tdi: TwoDInterface, filename: str, n_points: int,
     return z, r_out
 
 
+def load_torch_radius(filename: str, folder: str = 'output'
+                      ) -> tuple[np.ndarray, np.ndarray]:
+    """Loads axial positions and torch radii from a saved HDF5 file.
+
+    args:
+        filename: Name of the HDF5 file created by `save_torch_radius`
+        folder: Input directory, optional. Default is 'output'.
+
+    returns:
+        The axial positions [m] and torch radii [m].
+    """
+
+    with h5py.File(join(folder, filename), 'r') as f:
+        return f['axial position'][:], f['torch radius'][:]
+
+
 # --------------------------------------------------------------------------- #
 # Sampling and curve-fitting along axial direction
 # --------------------------------------------------------------------------- #

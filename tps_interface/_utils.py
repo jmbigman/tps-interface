@@ -32,6 +32,10 @@ def create_analysis_parser(description: str, default_output: str
                         metavar="\b", default=True, dest='pre_process',
                         help="Pre-process the data for time statistics")
 
+    parser.add_argument('--overwrite-radius', action='store_true',
+                        help="Recompute and overwrite existing torch radius"
+                        + " files")
+
     parser.add_argument('-o', metavar="\b", default=default_output,
                         dest='output',
                         help="Output filename for time statistics")

@@ -1,7 +1,7 @@
 """Analyzes 2-D cold flow data."""
 
 from os import makedirs
-from os.path import basename, join
+from os.path import basename, isfile, join
 
 import numpy as np
 
@@ -13,8 +13,8 @@ from matplotlib.ticker import AutoMinorLocator
 from tps_interface import TwoDInterface, time_statistics, TORCH_LENGTH, \
     step_finder, plot_radius, plot_axial, plot_radial, fit_profile, \
     save_torch_radius, plot_relative_error, mean_std, save_axial, \
-    create_analysis_parser
-from tps_interface.models import Angular, CounterFlow
+    create_analysis_parser, load_torch_radius
+from tps_interface.models import Angular, CounterFlow, Parameter
 
 FOLDER = 'output/cold_flow'
 
@@ -38,21 +38,20 @@ def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
     return mesh
 
 
-def _plot_parameters(z: np.ndarray, ang_params: np.ndarray,
-                     ax_params: np.ndarray) -> None:
+def _plot_parameters(z: np.ndarray, params: np.ndarray,
+                     parameters: tuple[Parameter, ...]) -> None:
     """Plots the momentum parameters along the axial coordinate.
 
     args:
         z: Axial positions [m]
-        ang_params: Angular momentum model profile parameters
-        ax_params: Axial momentum model profile parameters
+        params: Fitted parameters with shape (n_z, n_params)
+        parameters: Ordered specifications for the fitted parameters
     """
 
     plt.figure(figsize=(5, 3))
 
-    plt.plot(100*z, ang_params, label=r'$a_\theta$')
-    plt.plot(100*z, ax_params[:, 0], label='$n$')
-    plt.plot(100*z, ax_params[:, 1], label='$a$')
+    for parameter, values in zip(parameters, params.T, strict=True):
+        plt.plot(100*z, values, label=parameter.label)
 
     plt.xlabel(r'$z \,[\mathrm{cm}]$')
 
@@ -111,15 +110,31 @@ if __name__ == '__main__':
 
     tdi = TwoDInterface(mesh, n_points=200)
     # ----------------------------------------------------------------------- #
-    print("Saving and plotting original, no-step, and smoothed torch geometry")
+    print("Loading or saving and plotting torch geometry")
 
-    z, r = save_torch_radius(tdi, '1d_geometry.h5', 2000, folder=FOLDER)
+    if args.overwrite_radius or not isfile(join(FOLDER, '1d_geometry.h5')):
+        z, r = save_torch_radius(tdi, '1d_geometry.h5', 2000, folder=FOLDER)
+    else:
+        z, r = load_torch_radius('1d_geometry.h5', folder=FOLDER)
+
     plot_radius(z, r, 'original.pdf', folder=FOLDER)
-    z, r = save_torch_radius(tdi, '1d_geometry_no_step.h5', 2000,
-                             0.11, 0.15, mode='no_step', folder=FOLDER)
+
+    if (args.overwrite_radius
+            or not isfile(join(FOLDER, '1d_geometry_no_step.h5'))):
+        z, r = save_torch_radius(tdi, '1d_geometry_no_step.h5', 2000,
+                                 0.11, 0.15, mode='no_step', folder=FOLDER)
+    else:
+        z, r = load_torch_radius('1d_geometry_no_step.h5', folder=FOLDER)
+
     plot_radius(z, r, 'no_step.pdf', folder=FOLDER)
-    z, r = save_torch_radius(tdi, '1d_geometry_smooth.h5', 2000,
-                             2.5e-3, mode='smooth', folder=FOLDER)
+
+    if (args.overwrite_radius
+            or not isfile(join(FOLDER, '1d_geometry_smooth.h5'))):
+        z, r = save_torch_radius(tdi, '1d_geometry_smooth.h5', 2000,
+                                 2.5e-3, mode='smooth', folder=FOLDER)
+    else:
+        z, r = load_torch_radius('1d_geometry_smooth.h5', folder=FOLDER)
+
     plot_radius(z, r, 'smooth.pdf', folder=FOLDER)
     # ----------------------------------------------------------------------- #
     print("Locating the torch geometry step")
@@ -127,7 +142,7 @@ if __name__ == '__main__':
     z_step = step_finder(tdi, 0.12, 0.13, 1e-12, verbose=True)
 
     tdi.clear_radius_cache()
-
+    # ----------------------------------------------------------------------- #
     # Mesh refined in inlet and step regions
     z = np.linspace(tdi.z_min, 0.02, 10)
     z = np.append(z, np.linspace(z.max(), 0.11, 10))
@@ -141,48 +156,55 @@ if __name__ == '__main__':
           + " parameters")
 
     ang_model = Angular()
+    ang_specs = ang_model.parameters
 
     (ang_profs,
      ang_params,
      ang_rel,
-     ang_cs) = fit_profile(tdi, 'ang_sm_avg', z, ang_model)
+     ang_cs) = fit_profile(tdi, 'ang_sm_avg', z, ang_model,
+                           p0=tuple(p.initial for p in ang_specs),
+                           bounds=(tuple(p.lower for p in ang_specs),
+                                   tuple(p.upper for p in ang_specs)))
 
     plot_axial(z, ang_cs, r'r u_\theta', 'ang_sm.pdf', folder=FOLDER)
 
     plot_radial(z, ang_profs, r'\theta', join(FOLDER, 'ang_sm'), ang_model,
                 ang_params)
 
-    print("Angular fit parameter statistics")
-    _ = mean_std(z, ang_params)
+    for parameter, values in zip(ang_specs, ang_params.T, strict=True):
+        print(f"Angular {parameter.name} statistics")
+        _ = mean_std(z, values)
     # ----------------------------------------------------------------------- #
     # Axial velocity
     # ----------------------------------------------------------------------- #
     print("Evaluating axial velocity cross-sectional integral and parameters")
 
     axi_model = CounterFlow()
+    axi_specs = axi_model.parameters
 
     (axi_profs,
      axi_params,
      axi_rel,
      axi_cs) = fit_profile(tdi, 'vel_z_avg', z, axi_model,
-                           p0=(2.0, 0.0),
-                           bounds=((1.0 + 1e-8, -np.inf),
-                                   (np.inf, np.inf)))
+                           p0=tuple(p.initial for p in axi_specs),
+                           bounds=(tuple(p.lower for p in axi_specs),
+                                   tuple(p.upper for p in axi_specs)))
 
     plot_axial(z, axi_cs, 'u_z', 'axi_vel.pdf', folder=FOLDER)
 
     plot_radial(z, axi_profs, 'z', join(FOLDER, 'axi_vel'), axi_model,
                 axi_params)
 
-    print("Axial exponent statistics")
-    _ = mean_std(z, axi_params[:, 0])
+    for parameter, values in zip(axi_specs, axi_params.T, strict=True):
+        print(f"Axial {parameter.name} statistics")
+        _ = mean_std(z, values)
 
-    print("Axial polynomial parameter statistics")
-    _ = mean_std(z, axi_params[:, 1])
+    params = np.hstack((ang_params, axi_params))
+    parameter_specs = ang_specs + axi_specs
 
     # Axial development of parameters and relative error
     print("Plotting fitted parameters and relative errors")
-    _plot_parameters(z, ang_params, axi_params)
+    _plot_parameters(z, params, parameter_specs)
 
     plot_relative_error(z, np.vstack((ang_rel, axi_rel)),
                         [r'$f_\theta$', '$f_z$'],
@@ -206,13 +228,11 @@ if __name__ == '__main__':
                join(FOLDER, 'momentum.h5'),
                units=['m^3/s', 'm^4/s', 'm^3/s'])
 
-    save_axial(z, np.hstack((ang_params, axi_params)).T,
-               ['angular exponential',
-                'axial exponent',
-                'axial polynomial'],
+    parameter_names = ([f'angular {p.name}' for p in ang_specs]
+                       + [f'axial {p.name}' for p in axi_specs])
+
+    save_axial(z, params.T, parameter_names,
                join(FOLDER, 'parameters.h5'),
-               ['Specific angular momentum exponential parameter',
-                'Axial velocity power law exponent n',
-                'Axial velocity polynomial parameter a'])
+               [p.description for p in parameter_specs])
 
     print(f"Analysis complete. Results saved in {FOLDER}/")
