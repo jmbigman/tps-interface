@@ -39,13 +39,16 @@ def _pre_process(mesh: pv.UnstructuredGrid) -> pv.UnstructuredGrid:
 
 
 def _plot_parameters(z: np.ndarray, params: np.ndarray,
-                     parameters: tuple[Parameter, ...]) -> None:
+                     parameters: tuple[Parameter, ...],
+                     interactive: bool = False) -> None:
     """Plots the momentum parameters along the axial coordinate.
 
     args:
         z: Axial positions [m]
         params: Fitted parameters with shape (n_z, n_params)
         parameters: Ordered specifications for the fitted parameters
+        interactive: Show an interactive window after saving, optional.
+                     Default is False. Execution waits until the window closes.
     """
 
     plt.figure(figsize=(5, 3))
@@ -65,6 +68,10 @@ def _plot_parameters(z: np.ndarray, params: np.ndarray,
     plt.tight_layout()
 
     plt.savefig(join(FOLDER, 'momentum_params.pdf'))
+
+    if interactive:
+        plt.show()
+
     plt.close()
 
 
@@ -192,6 +199,9 @@ if __name__ == '__main__':
 
     plot_axial(z, axi_cs, 'u_z', 'axi_vel.pdf', folder=FOLDER)
 
+    print("Axial velocity cross-sectional integral statistics [m^3/s]")
+    _ = mean_std(z, axi_cs)
+
     plot_radial(z, axi_profs, 'z', join(FOLDER, 'axi_vel'), axi_model,
                 axi_params)
 
@@ -204,7 +214,7 @@ if __name__ == '__main__':
 
     # Axial development of parameters and relative error
     print("Plotting fitted parameters and relative errors")
-    _plot_parameters(z, params, parameter_specs)
+    _plot_parameters(z, params, parameter_specs, True)
 
     plot_relative_error(z, np.vstack((ang_rel, axi_rel)),
                         [r'$f_\theta$', '$f_z$'],

@@ -101,10 +101,10 @@ def plot_axial(z: Real[Array, " _"], f: Real[Array, " _"], var: str,
     else:
         plt.plot(100*z, f)
 
-        bottom, top = plt.ylim()
+        bottom, _ = plt.ylim()
 
         if bottom > 0:
-            plt.ylim(0.0, top)
+            plt.ylim(0.0, 1.05*np.max(f))
 
         plt.gca().xaxis.set_minor_locator(AutoMinorLocator(5))
         plt.gca().yaxis.set_minor_locator(AutoMinorLocator(5))
