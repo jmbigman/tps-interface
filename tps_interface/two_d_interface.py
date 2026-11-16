@@ -126,6 +126,7 @@ class TwoDInterface:
         self.radial_profile = np.vectorize(self.radial_profile, excluded=[0],
                                            signature='()->(n),()')
         self.cs_integral = np.vectorize(self.cs_integral, excluded=[0])
+        self.swirl_number = np.vectorize(self.swirl_number, excluded=[0, 1])
 
     @property
     def mesh(self) -> pv.UnstructuredGrid:
@@ -395,6 +396,39 @@ class TwoDInterface:
         r_pts = self.torch_radius(z)*self.r_norm
 
         return 2*np.pi*np.trapezoid(r_pts*field_values, r_pts)
+
+    def swirl_number(self, angular_field: str, axial_field: str,
+                     z: float) -> float:
+        """Evaluates the dimensionless swirl number
+
+            S = ⟨l_z u_z⟩ / (R ⟨u_z^2⟩)
+
+        at the given axial position.
+
+        args:
+            angular_field: Name of specific angular momentum field
+            axial_field: Name of axial velocity field
+            z: Axial position
+
+        returns:
+            the swirl number
+        """
+
+        angular = self.radial_sample(angular_field, z)
+        axial = self.radial_sample(axial_field, z)
+        radius = self.torch_radius(z)
+        s = self.r_norm
+
+        # The common cross-sectional factor 2*pi*R^2 cancels in the ratio.
+        numer = np.trapezoid(s*angular*axial, s)
+        denom = radius*np.trapezoid(s*axial**2, s)
+
+        if (not np.isfinite(numer) or not np.isfinite(denom) or denom <= 0):
+            raise ValueError("Swirl number is undefined"
+                             + f" at z={z}: numerator={numer},"
+                             + f" denominator={denom}")
+
+        return numer/denom
 
 
 # --------------------------------------------------------------------------- #

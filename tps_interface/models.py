@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from scipy.special import erfi
+from scipy.integrate import quad
 
 from jaxtyping import Real
 
@@ -39,7 +39,7 @@ class Model(ABC):
     """A parameterized radial function for a quantity. Letting the quantity be
     q(r, z), the radial function can be a dimensionless radial profile
 
-        f(r, z) = π R^2 q(r, z)/ ⟨q⟩(z)
+        f(r, z) = π R^2 q(r, z) / ⟨q⟩(z)
 
     or the actual quantity q(r, z).
     """
@@ -81,31 +81,24 @@ class Model(ABC):
 # --------------------------------------------------------------------------- #
 
 
-class Angular(Model):
-    """The parameterized dimensionless radial profile for the angular momentum.
-    This is a one parameter model
+class AngularRational(Model):
+    """A rational dimensionless radial profile for angular momentum.
 
-        f(x) = A * exp(a*x^2) * x^2 * (1 - x)
+        f(x; p) = A * x^2 * (1 - x) * [1 + (3/2 + 2*p)*(1 - x)]
+                  / [1 + p*(1 - x)]^2,
 
-    where the normalization coefficient, A, has an analytical expression.
+    where p > -1. The normalization coefficient is computed by adaptive
+    quadrature.
     """
 
     @property
     def parameters(self) -> tuple[Parameter, ...]:
-        """Describes the angular exponential parameter.
-
-        returns:
-            The specification for a.
-        """
-
-        prms = []
-
-        prms.append(Parameter(name='exponential',
-                              description='Specific angular momentum'
-                              + ' exponential a',
-                              label=r'$a_\theta$'))
-
-        return tuple(prms)
+        """Describes the rational parameter, constrained above minus one."""
+        return (Parameter(name='rational',
+                          description='Specific angular momentum rational'
+                          + ' parameter p',
+                          label=r'$p_\theta$', initial=0.0,
+                          lower=np.nextafter(-1.0, np.inf)),)
 
     @property
     def profile(self) -> bool:
@@ -113,52 +106,49 @@ class Angular(Model):
         return True
 
     @staticmethod
-    def _coeff(a: float) -> float:
-        """Normalization coefficient.
+    def _shape(x: Real[Array, "..."] | float, p: float
+               ) -> Real[Array, "..."] | float:
+        """Evaluates the unnormalized profile for a valid parameter."""
 
-        args:
-            a: Parameter
+        # Flipped coordinates
+        wall = 1.0 - x
+        # Equivalent to 1 + p*(1 - x), without cancellation near p = -1.
+        denom = x + (1.0 + p)*wall
 
-        returns:
-            the normalization coefficient
-        """
+        # Divide the numerator by denom before multiplying, avoiding its
+        # square and the potentially large factor 2*p.
+        out = x**2*(wall/denom)*(2.0+(1.5*wall-1.0)/denom)
 
-        term1 = np.exp(a) + 2
-        term1 /= 2*a**2
+        return out
 
-        term2 = 3*np.sqrt(np.pi)*erfi(np.sqrt(a))
-        term2 /= 4*a**2.5
+    @staticmethod
+    def _coeff(p: float) -> float:
+        """Computes A using the cross-sectional weight 2*x."""
 
-        recip = term1 - term2
+        if not np.isfinite(p) or p <= -1.0:
+            raise ValueError("p must be finite and greater than -1")
 
-        return 1.0/recip
+        # Relative tolerance also controls normalization error when the
+        # integral becomes small at large positive p.
+        integral, _ = quad(lambda x: 2.0*x*AngularRational._shape(x, p),
+                           0.0, 1.0, epsabs=0.0, epsrel=1e-12)
 
-    def __call__(self, x: Real[Array, " _"], a: float) -> Real[Array, " _"]:
+        return 1.0/integral
+
+    def __call__(self, x: Real[Array, " _"], p: float) -> Real[Array, " _"]:
         """Evaluates the angular momentum radial profile.
 
         args:
             x: Evaluation points in [0, 1] (normalized radius)
-            a: Parameter
+            p: Rational parameter, > -1
 
         returns:
             the evaluated profile
         """
-
-        x_sq = x**2
-
-        model_eval = x_sq*(1.0 - x)*np.exp(a*x_sq)
-
-        try:
-            with np.errstate(divide='raise', invalid='raise'):
-                coeff = self._coeff(a)
-        except FloatingPointError:
-            recip_coeff = 2*np.trapezoid(model_eval*x, x)
-            coeff = 1.0/recip_coeff
-
-        return coeff*model_eval
+        return self._coeff(p)*self._shape(x, p)
 
 
-class CounterFlow(Model):
+class AxialPowerPoly(Model):
     """This is a two parameter radial profile for the axial momentum
 
         f_z(s; n, a) = ((n + 2) / n) * (1 - s^n)
@@ -214,82 +204,3 @@ class CounterFlow(Model):
         out *= 1 - a*((n+2)/(2*(n+4)) - x**2)
 
         return out
-
-
-class Axial(Model):
-    """The parameterized dimensionless radial profile for the axial momentum.
-    This is a two parameter model
-
-        f(x) = A * (exp(a*x^2) - b) * (1 - x^2)
-
-    where the normalization coefficient, A, has an analytical expression.
-    """
-
-    @property
-    def parameters(self) -> tuple[Parameter, ...]:
-        """Describes the axial exponential and shift parameters.
-
-        returns:
-            The specifications for a and b.
-        """
-
-        prms = []
-
-        prms.append(Parameter(name='exponential',
-                              description='Axial velocity exponential'
-                              + ' parameter a',
-                              label=r'$a_z$'))
-
-        prms.append(Parameter(name='shift',
-                              description='Axial velocity shift parameter b',
-                              label=r'$b_z$'))
-
-        return tuple(prms)
-
-    @property
-    def profile(self) -> bool:
-        """Indicator the function is a dimensionless radial profile."""
-        return True
-
-    @staticmethod
-    def _coeff(a: float, b: float) -> float:
-        """Normalization coefficient.
-
-        args:
-            a: Exponential parameter
-            b: Shift parameter
-
-        returns:
-            the normalization coefficient
-        """
-
-        coeff = -2*a**2
-        coeff /= a**2*b + 2*a - 2*np.exp(a) + 2
-
-        return coeff
-
-    def __call__(self, x: Real[Array, " _"], a: float, b: float
-                 ) -> Real[Array, " _"]:
-        """Evaluates the axial momentum radial profile.
-
-        args:
-            x: Evaluation points in [0, 1] (normalized radius)
-            a: Exponential parameter
-            b: Shift parameter
-
-        returns:
-            the evaluated profile
-        """
-
-        x_sq = x**2
-
-        model_eval = (1.0 - x_sq)*(np.exp(a*x_sq) - b)
-
-        try:
-            with np.errstate(divide='raise', invalid='raise'):
-                coeff = self._coeff(a, b)
-        except FloatingPointError:
-            recip_coeff = 2*np.trapezoid(model_eval*x, x)
-            coeff = 1.0/recip_coeff
-
-        return coeff*model_eval

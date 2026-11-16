@@ -14,7 +14,7 @@ from tps_interface import TwoDInterface, time_statistics, TORCH_LENGTH, \
     step_finder, plot_radius, plot_axial, plot_radial, fit_profile, \
     save_torch_radius, plot_relative_error, mean_std, save_axial, \
     create_analysis_parser, load_torch_radius
-from tps_interface.models import Angular, CounterFlow, Parameter
+from tps_interface.models import AngularRational, AxialPowerPoly, Parameter
 
 FOLDER = 'output/cold_flow'
 
@@ -162,7 +162,7 @@ if __name__ == '__main__':
     print("Evaluating specific angular momentum cross-sectional integral and"
           + " parameters")
 
-    ang_model = Angular()
+    ang_model = AngularRational()
     ang_specs = ang_model.parameters
 
     (ang_profs,
@@ -186,7 +186,7 @@ if __name__ == '__main__':
     # ----------------------------------------------------------------------- #
     print("Evaluating axial velocity cross-sectional integral and parameters")
 
-    axi_model = CounterFlow()
+    axi_model = AxialPowerPoly()
     axi_specs = axi_model.parameters
 
     (axi_profs,
@@ -229,6 +229,14 @@ if __name__ == '__main__':
     plot_axial(z, rad_cs, 'u_r', 'rad_m', folder=FOLDER)
 
     # ----------------------------------------------------------------------- #
+    # Swirl number of the mean flow
+    # ----------------------------------------------------------------------- #
+    print("Computing mean-flow swirl number")
+    swirl = tdi.swirl_number('ang_sm_avg', 'vel_z_avg', z)
+
+    plot_axial(z, swirl, 'S', 'swirl_number.pdf', cs=False, folder=FOLDER)
+
+    # ----------------------------------------------------------------------- #
     # Save cross-sectional integrals, parameters
     # ----------------------------------------------------------------------- #
     print(f"Saving cross-sectional integrals and parameters to {FOLDER}")
@@ -237,6 +245,11 @@ if __name__ == '__main__':
                 'radial velocity'],
                join(FOLDER, 'momentum.h5'),
                units=['m^3/s', 'm^4/s', 'm^3/s'])
+
+    save_axial(z, swirl[np.newaxis, :], ['swirl number'],
+               join(FOLDER, 'swirl_number.h5'),
+               descs=['Mean-flow swirl number: <l_z u_z> / (R <u_z^2>)'],
+               units=['1'])
 
     parameter_names = ([f'angular {p.name}' for p in ang_specs]
                        + [f'axial {p.name}' for p in axi_specs])

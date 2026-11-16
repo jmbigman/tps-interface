@@ -135,6 +135,52 @@ def test_radial_profile(interface: TwoDInterface, field: str, z: float):
     assert_allclose(integral, exact_integral(field, z), rtol=INTEGRAL_RTOL)
 
 
+@pytest.mark.parametrize('speed', [-2.0, 2.0])
+def test_swirl_number(interface: TwoDInterface, speed: float):
+    """Checks products of linear fields against analytical flux integrals."""
+
+    mesh = interface.mesh
+    mesh.point_data['angular'] = 2*mesh.points[:, 0]
+    mesh.point_data['axial'] = speed*(1 + mesh.points[:, 0])
+    tdi = TwoDInterface(mesh, n_points=201)
+
+    radius = 1 - Z
+    angular_flux = 2*speed*(radius**3/3 + radius**4/4)
+    axial_flux = speed**2*(radius**2/2 + 2*radius**3/3 + radius**4/4)
+    expected = angular_flux/(radius*axial_flux)
+
+    result = tdi.swirl_number('angular', 'axial', Z)
+
+    assert_equal(result.shape, Z.shape)
+    assert_allclose(result, expected, rtol=1e-4)
+    for i, z in enumerate(Z):
+        assert_allclose(result[i], tdi.swirl_number('angular', 'axial', z))
+
+
+def test_swirl_number_edge_cases(interface: TwoDInterface,
+                                 monkeypatch: pytest.MonkeyPatch):
+    """Checks zero swirl and rejection of zero or nonfinite flux integrals."""
+
+    # No rotation.
+    interface.mesh.point_data['zero'] = np.zeros(interface.mesh.n_points)
+    assert_equal(interface.swirl_number('zero', 'linear', Z),
+                 np.zeros_like(Z))
+
+    # No axial velocity.
+    with pytest.raises(ValueError, match='Swirl number is undefined'):
+        interface.swirl_number('linear', 'zero', 0.5)
+
+    # Nonfinite angular or axial fields.
+    monkeypatch.setattr(interface, 'radial_sample',
+                        lambda field, z: np.full(interface.n_points,
+                                                 np.nan if field == 'bad'
+                                                 else 1.0))
+    with pytest.raises(ValueError, match='Swirl number is undefined'):
+        interface.swirl_number('bad', 'finite', 0.5)
+    with pytest.raises(ValueError, match='Swirl number is undefined'):
+        interface.swirl_number('finite', 'bad', 0.5)
+
+
 def test_array_inputs(interface: TwoDInterface):
     """Checks array output shapes, analytical values, and scalar consistency.
 
